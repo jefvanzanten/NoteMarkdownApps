@@ -12,6 +12,7 @@ export const editorTheme = EditorView.baseTheme({
     minWidth: "100%",
     boxSizing: "border-box",
     padding: "16px 0",
+    caretColor: "#e2e8f0",
   },
   ".cm-line": {
     padding: "0 16px",
@@ -21,8 +22,7 @@ export const editorTheme = EditorView.baseTheme({
     lineHeight: "1.6",
   },
   ".cm-cursor": {
-    borderLeftColor: "#e2e8f0",
-    borderLeftWidth: "2px",
+    borderLeft: "2px solid #e2e8f0",
   },
 
   // Heading sizes
