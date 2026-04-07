@@ -1,0 +1,58 @@
+{
+  "name": "@note/desktop-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NoteMarkdown desktop application",
+  "author": "NoteMarkdown",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node18 --external:electron --outfile=dist/main.js",
+    "electron:dev": "pnpm build && electron .",
+    "electron:pack": "pnpm build && electron-builder",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@note/electron-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.note.desktop-app",
+    "productName": "NoteMarkdown",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../web-tray-app/.next/standalone",
+        "to": "nextjs-server",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../web-tray-app/.next/static",
+        "to": "nextjs-server/.next/static",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../web-tray-app/public",
+        "to": "nextjs-server/public",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

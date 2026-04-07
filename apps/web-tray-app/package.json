@@ -1,0 +1,73 @@
+{
+  "name": "@note/web-tray-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NoteMarkdown tray application",
+  "author": "NoteMarkdown",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build:next": "next build",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --target=node18 --external:electron --outfile=dist-electron/main.js",
+    "electron:dev": "pnpm build:electron && electron .",
+    "electron:pack": "pnpm build:next && pnpm build:electron && electron-builder",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+  },
+  "dependencies": {
+    "@note/editor": "workspace:*",
+    "@note/electron-server": "workspace:*",
+    "@note/types": "workspace:*",
+    "@note/utils": "workspace:*",
+    "next": "^14.2.29",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.note.web-tray-app",
+    "productName": "NoteMarkdown Tray",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone/apps/web-tray-app",
+        "to": "nextjs-server",
+        "filter": ["**/*"]
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "nextjs-server/node_modules",
+        "filter": ["**/*"]
+      },
+      {
+        "from": ".next/static",
+        "to": "nextjs-server/.next/static",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "public",
+        "to": "nextjs-server/public",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

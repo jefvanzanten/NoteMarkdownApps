@@ -4,10 +4,19 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:tray": "pnpm --filter @note/web-tray-app dev",
+    "dev:demo": "pnpm --filter demo dev",
+    "build:tray-next": "pnpm --filter @note/web-tray-app build:next",
+    "pack:tray": "pnpm --filter @note/web-tray-app electron:pack",
+    "pack:desktop": "pnpm build:tray-next && pnpm --filter @note/desktop-app electron:pack",
+    "typecheck": "pnpm -r typecheck"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  },
   "packageManager": "pnpm@10.33.0"
 }
