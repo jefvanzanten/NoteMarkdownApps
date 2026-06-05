@@ -1,4 +1,5 @@
-import { WorkspaceEditor } from "@/components/WorkspaceEditor";
+import { redirect } from "next/navigation";
+import { resolveWorkspacePath } from "@/lib/pathResolver";
 
 interface WorkspacePageProps {
   params: Promise<{ path: string[] }>;
@@ -6,5 +7,6 @@ interface WorkspacePageProps {
 
 export default async function WorkspacePage({ params }: WorkspacePageProps) {
   const { path } = await params;
-  return <WorkspaceEditor pathSegments={path} />;
+  const workspacePath = resolveWorkspacePath(path);
+  redirect(`/workspace?path=${encodeURIComponent(workspacePath)}`);
 }

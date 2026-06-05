@@ -4,11 +4,25 @@
   padding: 0;
 }
 
+:root {
+  --app-bg: #1f1f1f;
+  --panel-bg: #2a2a2a;
+  --panel-bg-soft: #303030;
+  --panel-border: #3a3a3a;
+  --panel-border-strong: #444;
+  --text-main: #f3f3f3;
+  --text-muted: #b6b6b6;
+  --text-dim: #8f8f8f;
+  --accent-muted: #374151;
+  --accent-active: #364154;
+  --accent-warm: #d0a54f;
+}
+
 html, body {
   height: 100%;
-  background: #0f172a;
-  color: #e2e8f0;
-  font-family: system-ui, sans-serif;
+  background: var(--app-bg);
+  color: var(--text-main);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
 
 #__next, main {

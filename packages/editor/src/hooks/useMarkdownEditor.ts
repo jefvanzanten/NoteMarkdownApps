@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { EditorState, Transaction } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view";
 import { syntaxHighlighting, LanguageDescription } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { javascript } from "@codemirror/lang-javascript";
@@ -39,6 +39,8 @@ function buildExtensions(getView: () => EditorView | null, queueChange: (v: stri
     edgeWhitespaceSelection,
     editorTheme,
     createKeymap(getView),
+    drawSelection(),
+    highlightActiveLine(),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;

@@ -7,6 +7,9 @@ export const editorTheme = EditorView.baseTheme({
     fontSize: "14px",
     color: "#e2e8f0",
   },
+  "&.cm-focused": {
+    outline: "none",
+  },
   ".cm-content": {
     minHeight: "100%",
     minWidth: "100%",
@@ -23,6 +26,17 @@ export const editorTheme = EditorView.baseTheme({
   ".cm-cursor": {
     borderLeftColor: "#e2e8f0",
     borderLeftWidth: "2px",
+  },
+  ".cm-selectionBackground": {
+    backgroundColor: "rgba(56, 189, 248, 0.22) !important",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderRadius: "6px",
+    transition: "background-color 120ms ease",
+  },
+  "&.cm-focused .cm-activeLine": {
+    backgroundColor: "rgba(56, 189, 248, 0.12)",
   },
 
   // Heading sizes
@@ -84,6 +98,15 @@ export const editorTheme = EditorView.baseTheme({
     background: "#1e293b",
     borderRadius: "3px",
     padding: "0 3px",
+  },
+  ".cm-line.md-codeblock-line, .cm-line.md-codeblock-fence": {
+    background: "#0f172a",
+  },
+  ".cm-line.md-codeblock-fence": {
+    color: "#64748b",
+  },
+  "&.cm-focused .cm-line.md-codeblock-fence.cm-activeLine, &.cm-focused .cm-line.md-codeblock-line.cm-activeLine": {
+    background: "#132033",
   },
   ".md-link": { color: "#7dd3fc", textDecoration: "underline" },
   ".md-url": { color: "#64748b" },

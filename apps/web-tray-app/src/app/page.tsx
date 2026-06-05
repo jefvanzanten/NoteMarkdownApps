@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 
 export default function Home() {
-  redirect("/workspace/documents");
+  return <WorkspacePicker />;
 }

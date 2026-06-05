@@ -137,9 +137,15 @@ export const mdPlugin = ViewPlugin.fromClass(
         ? view.state.doc.lineAt(view.state.selection.main.head).number
         : -1;
       const tree = syntaxTree(view.state);
+      let fenceMarker: "```" | "~~~" | null = null;
 
       for (let ln = 1; ln <= view.state.doc.lines; ln++) {
         const line = view.state.doc.line(ln);
+        const fenceMatch = line.text.match(/^(```|~~~)(\S+)?\s*$/);
+        const isFenceLine = Boolean(fenceMatch);
+        const opensFence = Boolean(fenceMatch && fenceMarker === null);
+        const closesFence = Boolean(fenceMatch && fenceMarker === fenceMatch[1]);
+        const inFenceBlock = fenceMarker !== null || opensFence;
 
         if (horizontalRulePattern.test(line.text) && ln !== activeLine) {
           decs.push(Decoration.line({ class: "md-hr" }).range(line.from));
@@ -151,6 +157,20 @@ export const mdPlugin = ViewPlugin.fromClass(
           if (ln !== activeLine) {
             decs.push(Decoration.replace({}).range(line.from, line.from + hm[0].length));
           }
+        }
+
+        if (inFenceBlock) {
+          decs.push(
+            Decoration.line({
+              class: isFenceLine ? "md-codeblock-fence" : "md-codeblock-line",
+            }).range(line.from),
+          );
+        }
+
+        if (opensFence && fenceMatch && ln !== activeLine) {
+          decs.push(
+            Decoration.replace({}).range(line.from, line.from + fenceMatch[0].trimEnd().length),
+          );
         }
 
         const checklistItem = checklistByLine.get(line.from);
@@ -191,6 +211,12 @@ export const mdPlugin = ViewPlugin.fromClass(
               }
             },
           });
+        }
+
+        if (opensFence) {
+          fenceMarker = fenceMatch?.[1] as "```" | "~~~";
+        } else if (closesFence) {
+          fenceMarker = null;
         }
       }
 
