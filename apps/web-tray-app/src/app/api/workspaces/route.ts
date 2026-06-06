@@ -18,8 +18,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await registerWorkspace(workspacePath, workspaceName ?? "");
-    return NextResponse.json({ ok: true });
+    const workspace = await registerWorkspace(workspacePath, workspaceName ?? "");
+    return NextResponse.json(workspace);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 400 });

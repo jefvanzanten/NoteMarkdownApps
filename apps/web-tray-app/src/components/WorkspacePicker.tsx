@@ -2,9 +2,10 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { FolderBrowser } from "@/components/FolderBrowser";
+import { DirectoryBrowserDialog, type DirectoryListing } from "@note/file-browser";
 
 type RecentWorkspace = {
+  slug: string;
   path: string;
   name: string;
 };
@@ -15,7 +16,7 @@ async function fetchRecents(): Promise<RecentWorkspace[]> {
   return response.json() as Promise<RecentWorkspace[]>;
 }
 
-async function registerWorkspace(path: string, name: string): Promise<void> {
+async function registerWorkspace(path: string, name: string): Promise<RecentWorkspace> {
   const response = await fetch("/api/workspaces", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -26,6 +27,20 @@ async function registerWorkspace(path: string, name: string): Promise<void> {
     const payload = (await response.json()) as { error?: string };
     throw new Error(payload.error ?? "Failed to open workspace");
   }
+
+  return response.json() as Promise<RecentWorkspace>;
+}
+
+async function loadDirectoryListing(path?: string): Promise<DirectoryListing> {
+  const url = path
+    ? `/api/list-dirs?path=${encodeURIComponent(path)}`
+    : "/api/list-dirs";
+  const response = await fetch(url);
+  if (!response.ok) {
+    const payload = (await response.json()) as { error?: string };
+    throw new Error(payload.error ?? "Failed to list directories");
+  }
+  return response.json() as Promise<DirectoryListing>;
 }
 
 function defaultWorkspaceName(folderPath: string): string {
@@ -50,26 +65,32 @@ export function WorkspacePicker() {
     setRecentWorkspaces(recents);
   }
 
-  function navigateToWorkspace(path: string) {
+  function navigateToWorkspace(slug: string) {
     startTransition(() => {
-      router.push(`/workspace?path=${encodeURIComponent(path)}`);
+      router.push(`/workspaces/${encodeURIComponent(slug)}`);
     });
   }
 
   async function openWorkspace(path: string, name: string) {
     const trimmedPath = path.trim();
-    const trimmedName = name.trim() || defaultWorkspaceName(trimmedPath);
+    const trimmedName = name.trim();
 
     if (!trimmedPath) {
       setError("Enter a folder path.");
       return;
     }
 
+    if (!trimmedName) {
+      setError("Enter a workspace name.");
+      return;
+    }
+
     setError("");
 
     try {
-      await registerWorkspace(trimmedPath, trimmedName);
-      navigateToWorkspace(trimmedPath);
+      const workspace = await registerWorkspace(trimmedPath, trimmedName);
+      await loadRecents();
+      navigateToWorkspace(workspace.slug);
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : "Unknown error");
     }
@@ -83,8 +104,8 @@ export function WorkspacePicker() {
           <p style={eyebrowStyle}>Electron Workspace Mode</p>
           <h1 style={headingStyle}>Open a notes folder</h1>
           <p style={bodyStyle}>
-            The React desktop app now follows the Tauri workspace flow: choose a
-            folder, reopen recents, and manage markdown files directly from the tray app.
+            Workspaces are now loaded by name and slug instead of raw paths. Choose a
+            folder, assign a stable workspace name, and reopen it later through a clean URL.
           </p>
         </div>
 
@@ -170,11 +191,14 @@ export function WorkspacePicker() {
       </div>
 
       {showBrowser && (
-        <FolderBrowser
+        <DirectoryBrowserDialog
+          confirmLabel="Use This Folder"
+          isOpen={showBrowser}
+          loadListing={loadDirectoryListing}
           onClose={() => setShowBrowser(false)}
-          onSelect={(path) => {
+          onSelect={(path: string) => {
             setFolderPath(path);
-            if (!workspaceName) setWorkspaceName(defaultWorkspaceName(path));
+            setWorkspaceName((current) => current || defaultWorkspaceName(path));
             setShowBrowser(false);
           }}
         />

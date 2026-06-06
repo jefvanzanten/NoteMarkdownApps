@@ -7,7 +7,7 @@ import {
   collectBulletListItems,
   horizontalRulePattern,
   startTaskDrag,
-} from "./dragDrop.js";
+} from "./dragDrop";
 
 class DragHandleWidget extends WidgetType {
   constructor(readonly lineFrom: number) {

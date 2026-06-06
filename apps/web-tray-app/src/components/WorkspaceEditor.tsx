@@ -6,7 +6,9 @@ import type { TabDto } from "@note/types";
 import { FileTree, type WorkspaceFile } from "@/components/FileTree";
 
 type WorkspaceEditorProps = {
+  workspaceName: string;
   workspacePath: string;
+  workspaceSlug: string;
 };
 
 type TabState = {
@@ -62,8 +64,8 @@ function tabReducer(state: TabState, action: TabAction): TabState {
   }
 }
 
-async function listServerFiles(workspacePath: string): Promise<WorkspaceFile[]> {
-  const response = await fetch(`/api/files?workspace=${encodeURIComponent(workspacePath)}`);
+async function listServerFiles(workspaceSlug: string): Promise<WorkspaceFile[]> {
+  const response = await fetch(`/api/files?workspace=${encodeURIComponent(workspaceSlug)}`);
   if (!response.ok) {
     const payload = (await response.json()) as { error?: string };
     throw new Error(payload.error ?? "Failed to list files");
@@ -71,9 +73,9 @@ async function listServerFiles(workspacePath: string): Promise<WorkspaceFile[]> 
   return response.json() as Promise<WorkspaceFile[]>;
 }
 
-async function readServerFile(workspacePath: string, filePath: string): Promise<string> {
+async function readServerFile(workspaceSlug: string, filePath: string): Promise<string> {
   const response = await fetch(
-    `/api/file?workspace=${encodeURIComponent(workspacePath)}&path=${encodeURIComponent(filePath)}`,
+    `/api/file?workspace=${encodeURIComponent(workspaceSlug)}&path=${encodeURIComponent(filePath)}`,
   );
   if (!response.ok) {
     const payload = (await response.json()) as { error?: string };
@@ -83,12 +85,12 @@ async function readServerFile(workspacePath: string, filePath: string): Promise<
 }
 
 async function writeServerFile(
-  workspacePath: string,
+  workspaceSlug: string,
   filePath: string,
   content: string,
 ): Promise<void> {
   const response = await fetch(
-    `/api/file?workspace=${encodeURIComponent(workspacePath)}&path=${encodeURIComponent(filePath)}`,
+    `/api/file?workspace=${encodeURIComponent(workspaceSlug)}&path=${encodeURIComponent(filePath)}`,
     {
       method: "PUT",
       body: content,
@@ -101,9 +103,9 @@ async function writeServerFile(
   }
 }
 
-async function deleteServerFile(workspacePath: string, filePath: string): Promise<void> {
+async function deleteServerFile(workspaceSlug: string, filePath: string): Promise<void> {
   const response = await fetch(
-    `/api/file?workspace=${encodeURIComponent(workspacePath)}&path=${encodeURIComponent(filePath)}`,
+    `/api/file?workspace=${encodeURIComponent(workspaceSlug)}&path=${encodeURIComponent(filePath)}`,
     { method: "DELETE" },
   );
 
@@ -114,12 +116,12 @@ async function deleteServerFile(workspacePath: string, filePath: string): Promis
 }
 
 async function renameServerFile(
-  workspacePath: string,
+  workspaceSlug: string,
   filePath: string,
   newPath: string,
 ): Promise<void> {
   const response = await fetch(
-    `/api/file?workspace=${encodeURIComponent(workspacePath)}&path=${encodeURIComponent(filePath)}&newPath=${encodeURIComponent(newPath)}`,
+    `/api/file?workspace=${encodeURIComponent(workspaceSlug)}&path=${encodeURIComponent(filePath)}&newPath=${encodeURIComponent(newPath)}`,
     { method: "PATCH" },
   );
 
@@ -127,11 +129,6 @@ async function renameServerFile(
     const payload = (await response.json()) as { error?: string };
     throw new Error(payload.error ?? `Failed to rename ${filePath}`);
   }
-}
-
-function getWorkspaceName(workspacePath: string): string {
-  const parts = workspacePath.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? workspacePath;
 }
 
 function getFileTitle(filePath: string): string {
@@ -143,10 +140,9 @@ function getUntitledName(tabs: TabDto[]): string {
   return untitledCount === 0 ? "untitled" : `untitled (${untitledCount + 1})`;
 }
 
-export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
+export function WorkspaceEditor({ workspaceName, workspacePath, workspaceSlug }: WorkspaceEditorProps) {
   const [tabState, dispatch] = useReducer(tabReducer, { tabs: [], activeTabId: null });
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
-  const [workspaceName, setWorkspaceName] = useState(getWorkspaceName(workspacePath));
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -157,11 +153,10 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
   const activeFilePath = activeTab?.linked_path ?? null;
 
   useEffect(() => {
-    setWorkspaceName(getWorkspaceName(workspacePath));
     setWorkspaceFiles([]);
     dispatch({ type: "SET_TABS", tabs: [] });
     void refreshWorkspace(true);
-  }, [workspacePath]);
+  }, [workspaceSlug]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -209,19 +204,19 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
 
   useEffect(() => {
     if (!activeFilePath) return;
-    localStorage.setItem("last-open-path", activeFilePath);
-  }, [activeFilePath]);
+    localStorage.setItem(`last-open-path:${workspaceSlug}`, activeFilePath);
+  }, [activeFilePath, workspaceSlug]);
 
   async function refreshWorkspace(restoreLastOpen: boolean) {
     setLoading(true);
     setErrorMessage("");
 
     try {
-      const files = await listServerFiles(workspacePath);
+      const files = await listServerFiles(workspaceSlug);
       setWorkspaceFiles(files);
 
       if (restoreLastOpen) {
-        const lastPath = localStorage.getItem("last-open-path");
+        const lastPath = localStorage.getItem(`last-open-path:${workspaceSlug}`);
         if (lastPath && files.some((file) => file.path === lastPath)) {
           await openFile(lastPath, files);
         }
@@ -244,7 +239,7 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
     if (!fileEntry) return;
 
     try {
-      const content = (await readServerFile(workspacePath, filePath)).replace(/\r\n/g, "\n");
+      const content = (await readServerFile(workspaceSlug, filePath)).replace(/\r\n/g, "\n");
       dispatch({
         type: "UPSERT_TAB",
         tab: {
@@ -292,8 +287,8 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
       const finalPath = /\.(md|markdown)$/i.test(filename) ? filename : `${filename}.md`;
 
       try {
-        await writeServerFile(workspacePath, finalPath, activeTab.content);
-        const files = await listServerFiles(workspacePath);
+        await writeServerFile(workspaceSlug, finalPath, activeTab.content);
+        const files = await listServerFiles(workspaceSlug);
         setWorkspaceFiles(files);
         dispatch({
           type: "UPSERT_TAB",
@@ -313,7 +308,7 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
     }
 
     try {
-      await writeServerFile(workspacePath, activeTab.linked_path, activeTab.content);
+      await writeServerFile(workspaceSlug, activeTab.linked_path, activeTab.content);
       dispatch({ type: "UPSERT_TAB", tab: { ...activeTab, is_dirty: false } });
     } catch (saveError) {
       setErrorMessage(saveError instanceof Error ? saveError.message : "Failed to save file");
@@ -322,8 +317,8 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
 
   async function handleRename(oldPath: string, newPath: string) {
     try {
-      await renameServerFile(workspacePath, oldPath, newPath);
-      const files = await listServerFiles(workspacePath);
+      await renameServerFile(workspaceSlug, oldPath, newPath);
+      const files = await listServerFiles(workspaceSlug);
       setWorkspaceFiles(files);
       dispatch({
         type: "SET_TABS",
@@ -358,8 +353,8 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
     if (!window.confirm(`Delete ${label}?`)) return;
 
     try {
-      await deleteServerFile(workspacePath, path);
-      const files = await listServerFiles(workspacePath);
+      await deleteServerFile(workspaceSlug, path);
+      const files = await listServerFiles(workspaceSlug);
       setWorkspaceFiles(files);
       dispatch({
         type: "SET_TABS",
@@ -456,7 +451,7 @@ export function WorkspaceEditor({ workspacePath }: WorkspaceEditorProps) {
                 dirtyPaths={tabState.tabs
                   .filter((tab) => tab.is_dirty && tab.linked_path)
                   .map((tab) => tab.linked_path as string)}
-                storageKey={`collapsed-${workspaceName}`}
+                storageKey={`collapsed-${workspaceSlug}`}
                 onFileClick={(path) => void openFile(path)}
                 onRename={(oldPath, newPath) => void handleRename(oldPath, newPath)}
                 onDelete={(path, kind) => void handleDelete(path, kind)}
@@ -575,14 +570,26 @@ const tabStyle = {
   alignItems: "center",
   gap: "4px",
   borderRadius: "6px 6px 0 0",
-  border: "1px solid var(--panel-border)",
-  borderBottom: "none",
+  borderTopWidth: "1px",
+  borderTopStyle: "solid",
+  borderTopColor: "var(--panel-border)",
+  borderRightWidth: "1px",
+  borderRightStyle: "solid",
+  borderRightColor: "var(--panel-border)",
+  borderBottomWidth: "0",
+  borderBottomStyle: "solid",
+  borderBottomColor: "transparent",
+  borderLeftWidth: "1px",
+  borderLeftStyle: "solid",
+  borderLeftColor: "var(--panel-border)",
   background: "#242424",
   minWidth: 0,
 } as const;
 
 const activeTabStyle = {
-  borderColor: "var(--panel-border-strong)",
+  borderTopColor: "var(--panel-border-strong)",
+  borderRightColor: "var(--panel-border-strong)",
+  borderLeftColor: "var(--panel-border-strong)",
   background: "var(--app-bg)",
 } as const;
 

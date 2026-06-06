@@ -5,11 +5,11 @@ import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view
 import { syntaxHighlighting, LanguageDescription } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { javascript } from "@codemirror/lang-javascript";
-import { mdHighlight } from "../extensions/highlight.js";
-import { editorTheme, injectGlobalDragStyles } from "../extensions/theme.js";
-import { mdPlugin } from "../extensions/plugin.js";
-import { createKeymap, edgeWhitespaceSelection, history } from "../extensions/keymap.js";
-import { stopTaskDrag } from "../extensions/dragDrop.js";
+import { mdHighlight } from "../extensions/highlight";
+import { editorTheme, injectGlobalDragStyles } from "../extensions/theme";
+import { mdPlugin } from "../extensions/plugin";
+import { createKeymap, edgeWhitespaceSelection, history } from "../extensions/keymap";
+import { stopTaskDrag } from "../extensions/dragDrop";
 
 export interface UseMarkdownEditorOptions {
   content: string;

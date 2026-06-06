@@ -1,4 +1,4 @@
-import { useMarkdownEditor } from "./hooks/useMarkdownEditor.js";
+import { useMarkdownEditor } from "./hooks/useMarkdownEditor";
 
 export interface MarkdownEditorProps {
   content: string;

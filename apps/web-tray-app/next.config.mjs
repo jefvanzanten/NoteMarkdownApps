@@ -1,14 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
-  transpilePackages: ["@note/editor", "@note/types", "@note/utils"],
-  webpack: (config) => {
-    config.resolve.extensionAlias = {
-      ".js": [".ts", ".tsx", ".js", ".jsx"],
-      ".jsx": [".tsx", ".jsx"],
-    };
-    return config;
-  },
+  turbopack: {},
+  transpilePackages: ["@note/editor", "@note/file-browser", "@note/types", "@note/utils"],
 };
 
 export default nextConfig;

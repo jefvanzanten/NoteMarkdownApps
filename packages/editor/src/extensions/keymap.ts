@@ -1,7 +1,7 @@
 import { EditorView, keymap } from "@codemirror/view";
 import { history, undo, redo, indentMore, indentLess } from "@codemirror/commands";
 import { EditorSelection } from "@codemirror/state";
-import { textVerticalBounds } from "./dragDrop.js";
+import { textVerticalBounds } from "./dragDrop";
 
 export const toggleFormatting = (view: EditorView, prefix: string, suffix: string): boolean => {
   const { from, to } = view.state.selection.main;

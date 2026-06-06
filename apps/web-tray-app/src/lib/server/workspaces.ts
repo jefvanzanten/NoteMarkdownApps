@@ -2,9 +2,11 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-export type RecentWorkspace = {
-  path: string;
+export type WorkspaceRecord = {
+  slug: string;
   name: string;
+  path: string;
+  lastOpenedAt: string;
 };
 
 export type ServerFile = {
@@ -12,18 +14,14 @@ export type ServerFile = {
   name: string;
 };
 
-export type DirEntry = {
-  name: string;
+type LegacyWorkspaceRecord = {
   path: string;
+  name: string;
 };
 
-export type DirListing = {
-  current: string;
-  parent: string | null;
-  dirs: DirEntry[];
-};
-
-const RECENTS_PATH = path.join(os.homedir(), ".note-markdown", "recents.json");
+const STORAGE_DIR = path.join(os.homedir(), ".note-markdown");
+const WORKSPACES_PATH = path.join(STORAGE_DIR, "workspaces.json");
+const LEGACY_RECENTS_PATH = path.join(STORAGE_DIR, "recents.json");
 
 function comparePaths(a: string, b: string): boolean {
   if (process.platform === "win32") {
@@ -41,34 +39,66 @@ function isWithinRoot(rootPath: string, candidatePath: string): boolean {
   return rhs === lhs || rhs.startsWith(`${lhs}${path.sep}`);
 }
 
-function toWorkspacePath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
-
 async function ensureDirectoryExists(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
-async function readRecents(): Promise<RecentWorkspace[]> {
-  try {
-    const raw = await fs.readFile(RECENTS_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is RecentWorkspace =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof item.path === "string" &&
-        typeof item.name === "string",
-    );
-  } catch {
-    return [];
-  }
+function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as WorkspaceRecord).slug === "string" &&
+    typeof (value as WorkspaceRecord).name === "string" &&
+    typeof (value as WorkspaceRecord).path === "string" &&
+    typeof (value as WorkspaceRecord).lastOpenedAt === "string"
+  );
 }
 
-async function writeRecents(recents: RecentWorkspace[]): Promise<void> {
-  await ensureDirectoryExists(path.dirname(RECENTS_PATH));
-  await fs.writeFile(RECENTS_PATH, JSON.stringify(recents, null, 2), "utf-8");
+function isLegacyWorkspaceRecord(value: unknown): value is LegacyWorkspaceRecord {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as LegacyWorkspaceRecord).path === "string" &&
+    typeof (value as LegacyWorkspaceRecord).name === "string"
+  );
+}
+
+function defaultWorkspaceNameFromPath(workspacePath: string): string {
+  const cleaned = workspacePath.replace(/[\\/]+$/, "");
+  return path.basename(cleaned) || "workspace";
+}
+
+function slugifyWorkspaceName(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return slug || "workspace";
+}
+
+function uniqueWorkspaceSlug(
+  baseSlug: string,
+  records: WorkspaceRecord[],
+  currentRecord?: WorkspaceRecord,
+): string {
+  let candidate = baseSlug;
+  let counter = 2;
+
+  while (
+    records.some(
+      (record) =>
+        record.slug === candidate &&
+        (!currentRecord || !comparePaths(record.path, currentRecord.path)),
+    )
+  ) {
+    candidate = `${baseSlug}-${counter}`;
+    counter += 1;
+  }
+
+  return candidate;
 }
 
 async function resolveWorkspaceRoot(workspacePath: string): Promise<string> {
@@ -125,39 +155,126 @@ async function scanWorkspaceDir(
   }
 }
 
-export async function listRecentWorkspaces(): Promise<RecentWorkspace[]> {
-  return readRecents();
+async function readLegacyRecents(): Promise<LegacyWorkspaceRecord[]> {
+  try {
+    const raw = await fs.readFile(LEGACY_RECENTS_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isLegacyWorkspaceRecord);
+  } catch {
+    return [];
+  }
+}
+
+async function writeWorkspaces(records: WorkspaceRecord[]): Promise<void> {
+  await ensureDirectoryExists(STORAGE_DIR);
+  await fs.writeFile(WORKSPACES_PATH, JSON.stringify(records, null, 2), "utf-8");
+}
+
+async function migrateLegacyRecents(): Promise<WorkspaceRecord[]> {
+  const legacyRecords = await readLegacyRecents();
+  if (legacyRecords.length === 0) return [];
+
+  const migrated: WorkspaceRecord[] = [];
+
+  for (let index = 0; index < legacyRecords.length; index += 1) {
+    const legacy = legacyRecords[index];
+    const baseSlug = slugifyWorkspaceName(legacy.name || defaultWorkspaceNameFromPath(legacy.path));
+    const slug = uniqueWorkspaceSlug(baseSlug, migrated);
+
+    migrated.push({
+      slug,
+      name: legacy.name || defaultWorkspaceNameFromPath(legacy.path),
+      path: legacy.path,
+      lastOpenedAt: new Date(Date.now() - index * 1000).toISOString(),
+    });
+  }
+
+  await writeWorkspaces(migrated);
+  return migrated;
+}
+
+async function readWorkspaces(): Promise<WorkspaceRecord[]> {
+  try {
+    const raw = await fs.readFile(WORKSPACES_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return migrateLegacyRecents();
+    return parsed.filter(isWorkspaceRecord).sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
+  } catch {
+    return migrateLegacyRecents();
+  }
+}
+
+async function resolveWorkspaceRootBySlug(workspaceSlug: string): Promise<string> {
+  const workspace = await getWorkspaceBySlug(workspaceSlug);
+  return resolveWorkspaceRoot(workspace.path);
+}
+
+export function getDefaultWorkspaceName(workspacePath: string): string {
+  return defaultWorkspaceNameFromPath(workspacePath);
+}
+
+export async function listRecentWorkspaces(): Promise<WorkspaceRecord[]> {
+  return readWorkspaces();
+}
+
+export async function getWorkspaceBySlug(workspaceSlug: string): Promise<WorkspaceRecord> {
+  const slug = workspaceSlug.trim().toLowerCase();
+  const workspaces = await readWorkspaces();
+  const workspace = workspaces.find((entry) => entry.slug === slug);
+
+  if (!workspace) {
+    throw new Error("Workspace not found");
+  }
+
+  return workspace;
+}
+
+export async function findWorkspaceByPath(workspacePath: string): Promise<WorkspaceRecord | null> {
+  const resolvedPath = await resolveWorkspaceRoot(workspacePath);
+  const workspaces = await readWorkspaces();
+  return workspaces.find((entry) => comparePaths(entry.path, resolvedPath)) ?? null;
 }
 
 export async function registerWorkspace(
   workspacePath: string,
   name: string,
-): Promise<void> {
-  const resolved = await resolveWorkspaceRoot(workspacePath);
-  const recents = await readRecents();
-  const nextEntry: RecentWorkspace = {
-    path: resolved,
-    name: name.trim() || path.basename(resolved) || "workspace",
+): Promise<WorkspaceRecord> {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error("Workspace name is required");
+  }
+
+  const resolvedPath = await resolveWorkspaceRoot(workspacePath);
+  const workspaces = await readWorkspaces();
+  const current = workspaces.find((entry) => comparePaths(entry.path, resolvedPath));
+  const slug = uniqueWorkspaceSlug(slugifyWorkspaceName(trimmedName), workspaces, current);
+  const nextWorkspace: WorkspaceRecord = {
+    slug,
+    name: trimmedName,
+    path: resolvedPath,
+    lastOpenedAt: new Date().toISOString(),
   };
 
-  const deduped = recents.filter((item) => !comparePaths(item.path, resolved));
-  deduped.unshift(nextEntry);
+  const remaining = workspaces.filter((entry) => !comparePaths(entry.path, resolvedPath));
+  remaining.unshift(nextWorkspace);
 
-  await writeRecents(deduped.slice(0, 20));
+  await writeWorkspaces(remaining.slice(0, 50));
+  return nextWorkspace;
 }
 
-export async function listWorkspaceFiles(workspacePath: string): Promise<ServerFile[]> {
-  const rootPath = await resolveWorkspaceRoot(workspacePath);
+export async function listWorkspaceFiles(workspaceSlug: string): Promise<ServerFile[]> {
+  const rootPath = await resolveWorkspaceRootBySlug(workspaceSlug);
   const results: ServerFile[] = [];
   await scanWorkspaceDir(rootPath, "", results);
   return results;
 }
 
 export async function readWorkspaceFile(
-  workspacePath: string,
+  workspaceSlug: string,
   relativePath: string,
 ): Promise<string> {
-  const rootPath = await resolveWorkspaceRoot(workspacePath);
+  const rootPath = await resolveWorkspaceRootBySlug(workspaceSlug);
   const filePath = await resolveExistingWorkspacePath(rootPath, relativePath);
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) {
@@ -167,11 +284,11 @@ export async function readWorkspaceFile(
 }
 
 export async function writeWorkspaceFile(
-  workspacePath: string,
+  workspaceSlug: string,
   relativePath: string,
   content: string,
 ): Promise<void> {
-  const rootPath = await resolveWorkspaceRoot(workspacePath);
+  const rootPath = await resolveWorkspaceRootBySlug(workspaceSlug);
   const filePath = resolveTargetPath(rootPath, relativePath);
   const parentPath = path.dirname(filePath);
   const resolvedParent = await fs.realpath(parentPath).catch(() => null);
@@ -185,10 +302,10 @@ export async function writeWorkspaceFile(
 }
 
 export async function deleteWorkspaceEntry(
-  workspacePath: string,
+  workspaceSlug: string,
   relativePath: string,
 ): Promise<void> {
-  const rootPath = await resolveWorkspaceRoot(workspacePath);
+  const rootPath = await resolveWorkspaceRootBySlug(workspaceSlug);
   const targetPath = await resolveExistingWorkspacePath(rootPath, relativePath);
   const stat = await fs.stat(targetPath);
 
@@ -201,11 +318,11 @@ export async function deleteWorkspaceEntry(
 }
 
 export async function renameWorkspaceEntry(
-  workspacePath: string,
+  workspaceSlug: string,
   oldRelativePath: string,
   newRelativePath: string,
 ): Promise<void> {
-  const rootPath = await resolveWorkspaceRoot(workspacePath);
+  const rootPath = await resolveWorkspaceRootBySlug(workspaceSlug);
   const oldPath = await resolveExistingWorkspacePath(rootPath, oldRelativePath);
   const newPath = resolveTargetPath(rootPath, newRelativePath);
   const parentPath = path.dirname(newPath);
@@ -227,38 +344,4 @@ export async function renameWorkspaceEntry(
   }
 
   await fs.rename(oldPath, newPath);
-}
-
-export async function listDirectories(currentPath?: string): Promise<DirListing> {
-  const initialPath = currentPath?.trim() ? currentPath : os.homedir();
-  const resolvedPath = await fs.realpath(initialPath);
-  const stat = await fs.stat(resolvedPath);
-
-  if (!stat.isDirectory()) {
-    throw new Error("Path is not a directory");
-  }
-
-  const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
-  const dirs = entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => ({
-      name: entry.name,
-      path: path.join(resolvedPath, entry.name),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const parentPath = path.dirname(resolvedPath);
-  const parent = comparePaths(parentPath, resolvedPath) ? null : parentPath;
-
-  return {
-    current: resolvedPath,
-    parent,
-    dirs,
-  };
-}
-
-export function getWorkspaceDisplayName(workspacePath: string): string {
-  const cleaned = workspacePath.replace(/[\\/]+$/, "");
-  const baseName = path.basename(cleaned);
-  return baseName || toWorkspacePath(cleaned);
 }
