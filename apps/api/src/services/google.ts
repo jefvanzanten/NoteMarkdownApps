@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { ApiConfig } from "../config.js";
 
-const TokenResponseSchema = z.object({ access_token: z.string(), expires_in: z.number().int(), refresh_token: z.string().optional(), token_type: z.string() });
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+export const GOOGLE_OAUTH_SCOPES = `openid email profile ${DRIVE_SCOPE}`;
+
+const TokenResponseSchema = z.object({ access_token: z.string(), expires_in: z.number().int(), refresh_token: z.string().optional(), token_type: z.string(), scope: z.string().optional() });
 const IdentitySchema = z.object({ sub: z.string(), email: z.string().email(), name: z.string().min(1) });
 
 /**
@@ -38,5 +41,6 @@ export async function refreshGoogleAccessToken(refreshToken: string, config: Api
   const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ refresh_token: refreshToken, client_id: config.googleClientId, client_secret: config.googleClientSecret, grant_type: "refresh_token" }) });
   if (!response.ok) throw new Error("Google authorization must be renewed.");
   const token = TokenResponseSchema.parse(await response.json());
+  if (token.scope && !token.scope.split(/\s+/).includes(DRIVE_SCOPE)) throw new Error("Google authorization must be renewed.");
   return { accessToken: token.access_token, expiresAt: Date.now() + token.expires_in * 1000 };
 }

@@ -62,7 +62,7 @@ The API can boot and its health/database behavior can be tested with the placeho
 - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `apps/api/.env`;
 - `VITE_GOOGLE_PICKER_API_KEY` and `VITE_GOOGLE_APP_ID` in `apps/web-app/.env`.
 
-The OAuth grant uses `openid email profile` and the non-sensitive `drive.file` scope. Browser content traffic goes directly to Google Drive.
+The OAuth grant uses `openid email profile` and the full `drive` scope so selected folder workspaces can list their existing content. Browser content traffic goes directly to Google Drive.
 
 ## Verification
 
