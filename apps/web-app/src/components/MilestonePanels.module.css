@@ -1,0 +1,35 @@
+.results { margin: 0; padding: 0.25rem 0.45rem 1rem; list-style: none; }
+.results button { display: grid; width: 100%; gap: 0.28rem; border: 0; border-radius: var(--radius-sm); padding: 0.62rem; color: var(--color-text); background: transparent; text-align: left; cursor: pointer; }
+.results button:hover, .results button:focus-visible { background: var(--color-hover); }
+.results strong { overflow: hidden; font: 650 0.72rem var(--font-ui); text-overflow: ellipsis; white-space: nowrap; }
+.results span { display: -webkit-box; overflow: hidden; color: var(--color-text-dim); font: 0.65rem/1.45 var(--font-ui); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.empty { padding: 1rem; color: var(--color-text-dim); font: 0.74rem/1.5 var(--font-ui); }
+.dialogBackdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 1rem; background: rgb(5 9 6 / 62%); }
+.dialog { display: grid; width: min(28rem, 100%); max-height: min(80vh, 44rem); gap: 1rem; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; color: var(--color-text); background: var(--color-surface-raised); box-shadow: var(--shadow-strong); }
+.wide { width: min(46rem, 100%); }
+.dialog header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.dialog h2 { margin: 0; font-size: 1rem; }
+.dialog small { color: var(--color-text-dim); }
+.dialog header > button { width: 2rem; height: 2rem; border: 0; color: var(--color-text); background: transparent; font-size: 1.25rem; cursor: pointer; }
+.dialog label { display: grid; gap: 0.4rem; color: var(--color-text-muted); font: 0.72rem var(--font-ui); }
+.dialog input, .dialog select { min-height: 2.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0 0.65rem; color: var(--color-text); background: var(--color-canvas); }
+.dialog .check { display: flex; align-items: center; }
+.dialog .check input { min-height: 1.2rem; }
+.keybindings { display: grid; gap: 0.65rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0.75rem; }
+.keybindings legend { padding: 0 0.35rem; color: var(--color-text-muted); font: 700 0.72rem var(--font-ui); }
+.keybindings p { margin: 0; color: var(--color-danger); font: 0.68rem/1.4 var(--font-ui); }
+.primaryAction, .driveActions button, .workspaceList button { min-height: 2.5rem; border: 0; border-radius: var(--radius-sm); padding: 0 0.85rem; color: var(--color-button-text); background: var(--color-accent-strong); font: 650 0.72rem var(--font-ui); cursor: pointer; }
+.driveActions, .dangerActions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.workspaceList { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+.workspaceList li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); padding: 0.75rem; }
+.workspaceList li div { display: grid; gap: 0.2rem; }
+.dangerActions { border-top: 1px solid var(--color-border); padding-top: 1rem; }
+.dangerActions button { border: 0; color: var(--color-danger); background: transparent; font: 600 0.68rem var(--font-ui); cursor: pointer; }
+.historyList { display: grid; gap: 0.45rem; margin: 0; padding: 0; list-style: none; }
+.historyList li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); padding: 0.7rem; }
+.historyList li div { display: grid; min-width: 0; gap: 0.2rem; }
+.historyList strong { font-size: 0.72rem; }
+.historyList span { overflow: hidden; color: var(--color-text-dim); font: 0.65rem var(--font-code); text-overflow: ellipsis; white-space: nowrap; }
+.historyList button, .update button { min-height: 2.15rem; border: 0; border-radius: var(--radius-sm); padding: 0 0.75rem; color: var(--color-button-text); background: var(--color-accent-strong); font: 650 0.68rem var(--font-ui); cursor: pointer; }
+.update { position: fixed; right: 1rem; bottom: 2.5rem; z-index: 70; display: flex; align-items: center; gap: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.65rem 0.75rem; color: var(--color-text); background: var(--color-surface-raised); box-shadow: var(--shadow-soft); font: 0.72rem var(--font-ui); }
+@media (max-width: 600px) { .dialogBackdrop { align-items: end; padding: 0; } .dialog { width: 100%; max-height: 88vh; border-radius: var(--radius-md) var(--radius-md) 0 0; } .historyList li { align-items: stretch; flex-direction: column; } .update { right: 0.5rem; bottom: 2rem; left: 0.5rem; justify-content: space-between; } }

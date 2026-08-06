@@ -5,7 +5,7 @@ export const editorTheme = EditorView.baseTheme({
     height: "100%",
     fontFamily: '"Fira Code", Consolas, monospace',
     fontSize: "14px",
-    color: "#e2e8f0",
+    color: "var(--color-text, #e2e8f0)",
   },
   "&.cm-focused": {
     outline: "none",
@@ -15,7 +15,7 @@ export const editorTheme = EditorView.baseTheme({
     minWidth: "100%",
     boxSizing: "border-box",
     padding: "16px 0",
-    caretColor: "#e2e8f0",
+    caretColor: "var(--color-text, #e2e8f0)",
   },
   ".cm-line": {
     padding: "0 16px",
@@ -25,18 +25,18 @@ export const editorTheme = EditorView.baseTheme({
     lineHeight: "1.6",
   },
   ".cm-cursor": {
-    borderLeft: "2px solid #e2e8f0",
+    borderLeft: "2px solid var(--color-text, #e2e8f0)",
   },
   ".cm-selectionBackground": {
-    backgroundColor: "rgba(56, 189, 248, 0.22) !important",
+    backgroundColor: "color-mix(in srgb, var(--color-accent, #38bdf8) 28%, transparent) !important",
   },
   ".cm-activeLine": {
-    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    backgroundColor: "var(--color-hover, rgba(148, 163, 184, 0.08))",
     borderRadius: "6px",
     transition: "background-color 120ms ease",
   },
   "&.cm-focused .cm-activeLine": {
-    backgroundColor: "rgba(56, 189, 248, 0.12)",
+    backgroundColor: "var(--color-selected, rgba(56, 189, 248, 0.12))",
   },
 
   // Heading sizes
@@ -89,27 +89,27 @@ export const editorTheme = EditorView.baseTheme({
 
   // Markdown inline styles
   ".md-mark": { color: "currentcolor" },
-  ".md-strong": { fontWeight: "900", color: "#f1f5f9" },
+  ".md-strong": { fontWeight: "900", color: "var(--color-text, #f1f5f9)" },
   ".md-em": { fontStyle: "italic" },
-  ".md-strike": { textDecoration: "line-through", color: "#94a3b8" },
+  ".md-strike": { textDecoration: "line-through", color: "var(--color-text-muted, #94a3b8)" },
   ".md-code": {
     fontFamily: '"Fira Code", Consolas, monospace',
-    color: "#f472b6",
-    background: "#1e293b",
+    color: "var(--color-syntax-keyword, #f472b6)",
+    background: "var(--color-code, #1e293b)",
     borderRadius: "3px",
     padding: "0 3px",
   },
   ".cm-line.md-codeblock-line, .cm-line.md-codeblock-fence": {
-    background: "#0f172a",
+    background: "var(--color-code, #0f172a)",
   },
   ".cm-line.md-codeblock-fence": {
-    color: "#64748b",
+    color: "var(--color-text-dim, #64748b)",
   },
   "&.cm-focused .cm-line.md-codeblock-fence.cm-activeLine, &.cm-focused .cm-line.md-codeblock-line.cm-activeLine": {
-    background: "#132033",
+    background: "var(--color-selected, #132033)",
   },
-  ".md-link": { color: "#7dd3fc", textDecoration: "underline" },
-  ".md-url": { color: "#64748b" },
+  ".md-link": { color: "var(--color-accent-strong, #7dd3fc)", textDecoration: "underline" },
+  ".md-url": { color: "var(--color-text-dim, #64748b)" },
 
   // Drag-drop UI
   ".cm-task-handle": {

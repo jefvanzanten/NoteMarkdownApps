@@ -1,0 +1,21 @@
+{
+  "name": "@note/markdown-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "benchmark": "pnpm build && node scripts/benchmark.mjs",
+    "test": "cargo test",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

@@ -8,16 +8,34 @@ import { javascript } from "@codemirror/lang-javascript";
 import { mdHighlight } from "../extensions/highlight";
 import { editorTheme, injectGlobalDragStyles } from "../extensions/theme";
 import { mdPlugin } from "../extensions/plugin";
-import { createKeymap, edgeWhitespaceSelection, history } from "../extensions/keymap";
+import { edgeWhitespaceSelection, history } from "../extensions/keymap";
 import { stopTaskDrag } from "../extensions/dragDrop";
+import { createCommandKeymap, type EditorKeybindings } from "../commands";
 
 export interface UseMarkdownEditorOptions {
   content: string;
   sessionId: string;
   onChange: (sessionId: string, value: string, cursor: number) => void;
+  onSave?: (sessionId: string, value: string, cursor: number) => void;
+  keybindings?: EditorKeybindings;
+  spellCheck?: boolean;
+  initialCursor?: number;
 }
 
-function buildExtensions(getView: () => EditorView | null, queueChange: (v: string, c: number) => void): Extension[] {
+/**
+ * Builds the extensions shared by each document session.
+ * @param queueChange Debounced document-change callback.
+ * @param requestSave Immediate save callback.
+ * @param keybindings Optional command binding overrides.
+ * @param spellCheck Whether browser-native spelling is enabled.
+ * @returns CodeMirror extensions for the Markdown editor.
+ */
+function buildExtensions(
+  queueChange: (value: string, cursor: number) => void,
+  requestSave: (view: EditorView) => void,
+  keybindings: EditorKeybindings,
+  spellCheck: boolean,
+): Extension[] {
   return [
     history(),
     markdown({
@@ -38,7 +56,8 @@ function buildExtensions(getView: () => EditorView | null, queueChange: (v: stri
     mdPlugin,
     edgeWhitespaceSelection,
     editorTheme,
-    createKeymap(getView),
+    createCommandKeymap(keybindings, { requestSave }),
+    EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false" }),
     drawSelection(),
     highlightActiveLine(),
     EditorView.lineWrapping,
@@ -49,7 +68,20 @@ function buildExtensions(getView: () => EditorView | null, queueChange: (v: stri
   ];
 }
 
-export function useMarkdownEditor({ content, sessionId, onChange }: UseMarkdownEditorOptions) {
+/**
+ * Owns one CodeMirror view while retaining independent state per document session.
+ * @param options Document content, session callbacks, and editor preferences.
+ * @returns A ref for the editor host element.
+ */
+export function useMarkdownEditor({
+  content,
+  sessionId,
+  onChange,
+  onSave,
+  keybindings = {},
+  spellCheck = true,
+  initialCursor = 0,
+}: UseMarkdownEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editorStates = useRef(new Map<string, EditorState>());
@@ -60,8 +92,10 @@ export function useMarkdownEditor({ content, sessionId, onChange }: UseMarkdownE
   // Stable refs so closures always read current values
   const sessionIdRef = useRef(sessionId);
   const onChangeRef = useRef(onChange);
+  const onSaveRef = useRef(onSave);
   sessionIdRef.current = sessionId;
   onChangeRef.current = onChange;
+  onSaveRef.current = onSave;
 
   // Mount: create the EditorView once
   useEffect(() => {
@@ -78,11 +112,22 @@ export function useMarkdownEditor({ content, sessionId, onChange }: UseMarkdownE
       }, 300);
     };
 
-    const extensions = buildExtensions(() => viewRef.current, queueChange);
+    const requestSave = (editorView: EditorView) => {
+      if (pendingChangeTimeout.current) {
+        clearTimeout(pendingChangeTimeout.current);
+        pendingChangeTimeout.current = null;
+      }
+      const value = editorView.state.doc.toString();
+      const cursor = editorView.state.selection.main.head;
+      onChangeRef.current(sessionIdRef.current, value, cursor);
+      onSaveRef.current?.(sessionIdRef.current, value, cursor);
+    };
+
+    const extensions = buildExtensions(queueChange, requestSave, keybindings, spellCheck);
     extensionsRef.current = extensions;
 
     const view = new EditorView({
-      state: EditorState.create({ doc: content, extensions }),
+      state: EditorState.create({ doc: content, selection: { anchor: Math.min(initialCursor, content.length) }, extensions }),
       parent: containerRef.current,
     });
 
@@ -115,7 +160,7 @@ export function useMarkdownEditor({ content, sessionId, onChange }: UseMarkdownE
       view.setState(savedState);
     } else {
       // New session: fresh state with same extensions
-      const newState = EditorState.create({ doc: content, extensions: extensionsRef.current });
+      const newState = EditorState.create({ doc: content, selection: { anchor: Math.min(initialCursor, content.length) }, extensions: extensionsRef.current });
       view.setState(newState);
       editorStates.current.set(sessionId, newState);
     }

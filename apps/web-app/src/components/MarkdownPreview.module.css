@@ -1,0 +1,61 @@
+.preview {
+  height: 100%;
+  overflow: auto;
+  padding: clamp(1.5rem, 5vw, 4.5rem);
+  color: var(--color-text);
+  background: var(--color-canvas);
+}
+
+.preview > div {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  font-family: var(--font-reading);
+  font-size: 1rem;
+  line-height: 1.78;
+}
+
+.preview h1,
+.preview h2,
+.preview h3,
+.preview h4 {
+  font-family: var(--font-ui);
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+  scroll-margin-top: 2rem;
+}
+
+.preview h1 { margin: 0 0 1.75rem; font-size: clamp(2rem, 5vw, 3.25rem); }
+.preview h2 { margin-top: 2.5rem; font-size: 1.6rem; }
+.preview h3 { margin-top: 2rem; font-size: 1.22rem; }
+.preview p { margin: 0 0 1.2rem; }
+.preview a { color: var(--color-accent-strong); text-underline-offset: 0.18em; }
+.preview blockquote { margin: 1.5rem 0; padding-left: 1.25rem; border-left: 3px solid var(--color-accent); color: var(--color-text-muted); }
+.preview img { display: block; max-width: 100%; height: auto; margin: 1.75rem auto; border-radius: var(--radius-md); }
+.preview table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-family: var(--font-ui); font-size: 0.9rem; }
+.preview th,
+.preview td { padding: 0.65rem 0.8rem; border: 1px solid var(--color-border); text-align: left; }
+.preview th { background: var(--color-surface-raised); }
+.preview code { padding: 0.15em 0.35em; border-radius: 0.3em; background: var(--color-code); font-family: var(--font-code); font-size: 0.88em; }
+.preview pre { overflow: auto; padding: 1.1rem 1.25rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-code); }
+.preview pre code { padding: 0; background: none; }
+.preview :global(.syntaxKeyword) { color: var(--color-syntax-keyword); font-weight: 650; }
+.preview input[type="checkbox"] { accent-color: var(--color-accent-strong); }
+
+.brokenImage {
+  min-width: 10rem;
+  min-height: 4rem;
+  border: 1px dashed var(--color-danger);
+}
+
+.message {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  color: var(--color-text-muted);
+  font-family: var(--font-ui);
+}
+
+@media print {
+  .preview { height: auto; overflow: visible; padding: 0; color: #111; background: #fff; }
+  .preview > div { width: 100%; }
+}

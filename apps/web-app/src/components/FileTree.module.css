@@ -1,0 +1,35 @@
+.tree,
+.group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree {
+  min-height: 100%;
+  padding: 0.4rem 0.45rem 1rem;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  min-height: 2.15rem;
+  align-items: center;
+  gap: 0.45rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding-block: 0.35rem;
+  padding-inline-end: 0.55rem;
+  color: var(--color-text-muted);
+  background: transparent;
+  font: 500 0.82rem/1.2 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover { color: var(--color-text); background: var(--color-hover); }
+.row:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.selected { color: var(--color-text); background: var(--color-selected); }
+.icon { width: 0.8rem; flex: 0 0 0.8rem; color: var(--color-accent); text-align: center; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

@@ -1,0 +1,16 @@
+{
+  "name": "NoteMarkdown",
+  "short_name": "NoteMarkdown",
+  "description": "Local-first Markdown editor",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#141916",
+  "theme_color": "#286b46",
+  "lang": "en",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "file_handlers": [{ "action": "/", "accept": { "text/markdown": [".md"] } }]
+}

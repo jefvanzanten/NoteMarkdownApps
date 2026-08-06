@@ -1,0 +1,20 @@
+.banner {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 40;
+  display: grid;
+  width: min(calc(100vw - 2rem), 420px);
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: 0.9rem 1rem;
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-strong);
+  font: 0.8rem/1.4 var(--font-ui);
+}
+.banner strong { color: var(--color-danger); }
+.banner span { grid-column: 1; color: var(--color-text-muted); }
+.banner button { grid-column: 2; grid-row: 1 / span 2; align-self: center; border: 0; color: var(--color-text-muted); background: none; font-size: 1.2rem; cursor: pointer; }

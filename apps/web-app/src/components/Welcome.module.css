@@ -1,0 +1,44 @@
+.welcome {
+  position: relative;
+  display: grid;
+  min-height: 100%;
+  overflow: hidden;
+  place-items: center;
+  padding: 2rem;
+  background: var(--color-canvas);
+}
+
+.ambient {
+  position: absolute;
+  width: min(70vw, 800px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 66%);
+  filter: blur(12px);
+  transform: translate(18%, -18%);
+}
+
+.card { position: relative; width: min(100%, 680px); }
+.mark {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 3.5rem;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 0.85rem;
+  color: var(--color-canvas);
+  background: var(--color-text);
+  font: 750 1.3rem var(--font-ui);
+  transform: rotate(-3deg);
+}
+.eyebrow { margin: 0 0 1rem; color: var(--color-accent-strong); font: 650 0.72rem var(--font-code); letter-spacing: 0.12em; text-transform: uppercase; }
+.card h1 { max-width: 620px; margin: 0; color: var(--color-text); font: 720 clamp(2.8rem, 8vw, 5.8rem)/0.96 var(--font-ui); letter-spacing: -0.065em; }
+.lead { max-width: 560px; margin: 1.75rem 0 2rem; color: var(--color-text-muted); font: 400 clamp(1rem, 2vw, 1.2rem)/1.65 var(--font-reading); }
+.openButton { display: inline-flex; min-height: 3.25rem; align-items: center; gap: 0.8rem; border: 0; border-radius: var(--radius-md); padding: 0 1.35rem; color: var(--color-button-text); background: var(--color-accent-strong); font: 680 0.88rem var(--font-ui); cursor: pointer; box-shadow: var(--shadow-soft); }
+.openButton:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
+.openButton:disabled { cursor: not-allowed; opacity: 0.45; }
+.driveButton { min-height: 3.25rem; margin-left: 0.65rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0 1.2rem; color: var(--color-text); background: var(--color-surface); font: 680 0.88rem var(--font-ui); cursor: pointer; }
+.unsupported { max-width: 560px; color: var(--color-danger); font: 0.82rem/1.5 var(--font-ui); }
+.privacy { display: flex; align-items: center; gap: 0.55rem; margin-top: 2rem; color: var(--color-text-dim); font: 0.72rem var(--font-code); }
+.privacy span { color: var(--color-success); font-size: 0.5rem; }
