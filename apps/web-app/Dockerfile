@@ -30,6 +30,8 @@ ENV VITE_BASE_PATH="$VITE_BASE_PATH"
 
 COPY apps/web-app apps/web-app
 COPY packages/api-contracts packages/api-contracts
+COPY packages/browser-storage packages/browser-storage
+COPY packages/sync-core packages/sync-core
 COPY packages/editor packages/editor
 COPY packages/markdown-wasm packages/markdown-wasm
 COPY packages/workspace-core packages/workspace-core
