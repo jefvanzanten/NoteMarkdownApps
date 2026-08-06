@@ -12,7 +12,7 @@ const IdentitySchema = z.object({ sub: z.string(), email: z.string().email(), na
  * @returns Validated provider token response.
  */
 export async function exchangeGoogleCode(code: string, verifier: string, config: ApiConfig): Promise<z.infer<typeof TokenResponseSchema>> {
-  const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, code_verifier: verifier, client_id: config.googleClientId, client_secret: config.googleClientSecret, redirect_uri: `${config.publicOrigin}/api/v1/auth/google/callback`, grant_type: "authorization_code" }) });
+  const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, code_verifier: verifier, client_id: config.googleClientId, client_secret: config.googleClientSecret, redirect_uri: `${config.publicBaseUrl}/api/v1/auth/google/callback`, grant_type: "authorization_code" }) });
   if (!response.ok) throw new Error("Google rejected the authorization code.");
   return TokenResponseSchema.parse(await response.json());
 }

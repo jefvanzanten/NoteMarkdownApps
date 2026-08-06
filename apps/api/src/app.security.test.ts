@@ -3,7 +3,7 @@ import { createApiApp } from "./app.js";
 import type { ApiConfig } from "./config.js";
 import type { ApiRepository } from "./repository.js";
 
-const config = { publicOrigin: "https://notes.example", googleClientId: "client", secureCookies: true } as ApiConfig;
+const config = { publicOrigin: "https://notes.example", publicBaseUrl: "https://notes.example/notes", googleClientId: "client", secureCookies: true } as ApiConfig;
 
 /** Creates an API with an isolated repository double. @param overrides Repository methods under test. @returns Hono API. */
 function testApp(overrides: Partial<ApiRepository>) { return createApiApp({ config, repository: { findSessionUser: async () => "11111111-1111-4111-8111-111111111111", ...overrides } as ApiRepository }); }

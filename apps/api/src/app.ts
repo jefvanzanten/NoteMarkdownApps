@@ -52,7 +52,7 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
     const state = randomToken(); const verifier = randomToken(48); const currentSession = getCookie(context, SESSION_COOKIE); const userId = currentSession ? await repository.findSessionUser(hashToken(currentSession)) : null;
     await repository.createOAuthAttempt({ stateHash: hashToken(state), userId, verifier, returnTo, expiresAt: new Date(Date.now() + 10 * 60_000) });
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.search = new URLSearchParams({ client_id: config.googleClientId, redirect_uri: `${config.publicOrigin}/api/v1/auth/google/callback`, response_type: "code", scope: "openid email profile https://www.googleapis.com/auth/drive.file", access_type: "offline", prompt: "consent", state, code_challenge: pkceChallenge(verifier), code_challenge_method: "S256", include_granted_scopes: "true" }).toString();
+    url.search = new URLSearchParams({ client_id: config.googleClientId, redirect_uri: `${config.publicBaseUrl}/api/v1/auth/google/callback`, response_type: "code", scope: "openid email profile https://www.googleapis.com/auth/drive.file", access_type: "offline", prompt: "consent", state, code_challenge: pkceChallenge(verifier), code_challenge_method: "S256", include_granted_scopes: "true" }).toString();
     return context.redirect(url.toString());
   });
 

@@ -14,6 +14,7 @@ const EnvironmentSchema = z.object({
 export interface ApiConfig {
   databaseUrl: string;
   publicOrigin: string;
+  publicBaseUrl: string;
   googleClientId: string;
   googleClientSecret: string;
   tokenEncryptionKeys: Map<number, Buffer>;
@@ -40,9 +41,11 @@ function parseKeyRing(source: string): Pick<ApiConfig, "tokenEncryptionKeys" | "
  */
 export function loadConfig(): ApiConfig {
   const environment = EnvironmentSchema.parse(process.env);
+  const publicBaseUrl = environment.PUBLIC_ORIGIN.replace(/\/$/, "");
   return {
     databaseUrl: environment.DATABASE_URL,
-    publicOrigin: environment.PUBLIC_ORIGIN.replace(/\/$/, ""),
+    publicOrigin: new URL(publicBaseUrl).origin,
+    publicBaseUrl,
     googleClientId: environment.GOOGLE_CLIENT_ID,
     googleClientSecret: environment.GOOGLE_CLIENT_SECRET,
     port: environment.PORT,
