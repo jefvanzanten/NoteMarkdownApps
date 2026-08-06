@@ -6,7 +6,7 @@ let waitingWorker: ServiceWorker | null = null;
  */
 export async function registerPwa(): Promise<void> {
   if (!("serviceWorker" in navigator) || import.meta.env.DEV) return;
-  const registration = await navigator.serviceWorker.register("/sw.js");
+  const registration = await navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL });
   const announce = (worker: ServiceWorker | null): void => {
     if (!worker) return;
     waitingWorker = worker;

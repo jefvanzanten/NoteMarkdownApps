@@ -23,8 +23,10 @@ RUN apk add --no-cache build-base curl \
 
 ARG VITE_GOOGLE_PICKER_API_KEY=""
 ARG VITE_GOOGLE_APP_ID=""
+ARG VITE_BASE_PATH="/notes/"
 ENV VITE_GOOGLE_PICKER_API_KEY="$VITE_GOOGLE_PICKER_API_KEY"
 ENV VITE_GOOGLE_APP_ID="$VITE_GOOGLE_APP_ID"
+ENV VITE_BASE_PATH="$VITE_BASE_PATH"
 
 COPY apps/web-app apps/web-app
 COPY packages/api-contracts packages/api-contracts

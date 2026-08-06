@@ -12,7 +12,12 @@ server {
         return 200 "ok\n";
     }
 
-    location /api/ {
+    location = /notes {
+        return 308 /notes/;
+    }
+
+    location /notes/api/ {
+        rewrite ^/notes(/api/.*)$ $1 break;
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
@@ -22,21 +27,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /openapi.json {
+    location = /notes/openapi.json {
         proxy_pass ${API_UPSTREAM}/openapi.json;
         proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /index.html {
+    location = /notes/index.html {
+        rewrite ^/notes/index\.html$ /index.html break;
         add_header Cache-Control "no-cache";
     }
 
-    location = /sw.js {
+    location = /notes/sw.js {
+        rewrite ^/notes/sw\.js$ /sw.js break;
         add_header Cache-Control "no-cache";
     }
 
-    location / {
+    location = /notes/manifest.webmanifest {
+        rewrite ^/notes/manifest\.webmanifest$ /manifest.webmanifest break;
+        default_type application/manifest+json;
+    }
+
+    location /notes/ {
+        rewrite ^/notes/(.*)$ /$1 break;
         try_files $uri $uri/ /index.html;
     }
 }

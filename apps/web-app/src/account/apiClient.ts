@@ -2,9 +2,14 @@ import type { CreateWorkspace, DriveWorkspaceReference, Me, PreferenceValue } fr
 
 interface ApiFailure { error?: { code?: string; message?: string } }
 
+/** Prefixes an application path with the configured public base path. @param path Root-relative application path. @returns Public path below the deployment base. */
+export function appPath(path: string): string {
+  return `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+}
+
 /** Performs one same-origin metadata API request with stable error handling. @param path Versioned API path. @param init Fetch options. @returns Validated-by-server JSON payload. */
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, { credentials: "include", ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
+  const response = await fetch(appPath(path), { credentials: "include", ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
   if (!response.ok) { const failure = await response.json().catch(() => ({})) as ApiFailure; throw new Error(failure.error?.message ?? `API request failed (${response.status}).`); }
   return response.json() as Promise<T>;
 }

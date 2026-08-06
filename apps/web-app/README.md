@@ -69,6 +69,16 @@ Renderer performance budget:
 pnpm --filter @note/markdown-wasm benchmark
 ```
 
+## Production subpath deployment
+
+The production Docker image is built for `/notes/`. Configure the Coolify web-app domain as `https://apps.jefvanzanten.dev/notes`, leave **Strip Prefixes** disabled, and redeploy after changing the route. Configure the API with:
+
+```text
+PUBLIC_ORIGIN=https://apps.jefvanzanten.dev/notes
+```
+
+The Google OAuth client's authorized redirect URI must be `https://apps.jefvanzanten.dev/notes/api/v1/auth/google/callback`. The Nginx runtime removes `/notes` only when forwarding API requests to the API container.
+
 ## Brave verification
 
 1. Open the HTTPS/localhost app in a current Brave release.
