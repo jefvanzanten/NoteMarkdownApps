@@ -2,25 +2,12 @@
 **/dist
 **/.next
 **/coverage
+**/target
 **/.env
 **/.env.*
 **/*.log
+**/*.tsbuildinfo
 
 .git
 .vscode
 .idea
-
-apps/demo
-apps/desktop-app
-apps/web-app
-apps/web-tray-app
-packages/editor
-packages/electron-server
-packages/file-browser
-packages/markdown-wasm
-packages/types
-packages/utils
-packages/workspace-core
-packages/workspace-drive
-packages/workspace-local
-docs
