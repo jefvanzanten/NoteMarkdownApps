@@ -26,7 +26,9 @@ Fast deterministic tests for:
 - `.notemarkdownignore` behavior;
 - command registry and keybinding conflict rules;
 - settings merge/sync rules;
-- revision comparisons;
+- revision comparisons and independent observed-provider/cached-content/index-generation transitions;
+- priority-queue ordering, request deduplication, cancellation generations, retry timing, and starvation prevention;
+- workspace sync-leader and document editing-lease state transitions;
 - operation state transitions and retry timing;
 - history thinning and trash expiry;
 - query parsing and exact phrases;
@@ -75,7 +77,9 @@ Exercise real boundaries where practical:
 - editor events through durable draft persistence;
 - worker message protocols and stale-generation cancellation;
 - WASM initialization/rendering through the actual wrapper;
-- IndexedDB/OPFS transactions and migrations;
+- IndexedDB/OPFS transactions, encryption, corruption isolation, and migrations;
+- central repository commit ordering across manifest, content revision, pending writes, recovery, and derived-index generations;
+- multi-tab leader/follower propagation through Web Locks/BroadcastChannel and the IndexedDB lease fallback;
 - search indexing after file lifecycle events;
 - API runtime schemas through Hono routes;
 - Drizzle repositories against PostgreSQL;
@@ -98,9 +102,14 @@ Required critical journeys:
 10. Sign in, select/create Drive folder, mirror, edit, and sync.
 11. Revoke permission/session and recover through reauthorization.
 12. Produce and resolve a Drive conflict without losing either side.
-13. Explicitly logout and verify Drive mirror lock.
+13. Explicitly logout and verify Drive repository lock.
 14. Delete account and verify NoteMarkdown data removal without Drive-file deletion.
 15. Restore app state and linked Drive workspace on another simulated device.
+16. Warm-start a cached workspace without waiting for provider I/O and assert zero unchanged Drive content downloads.
+17. Prioritize active/open document checks over a large background batch and apply one remote change with exactly one content download.
+18. Confirm remote deletion of a clean and dirty open document; verify accessible destroyed-tab motion and persistent dirty-draft recovery.
+19. Open the same workspace/document in two app tabs and verify one sync leader plus explicit editing takeover.
+20. Resume from a Drive Changes cursor; handle move/delete, token invalidation, ambiguous ancestry, and full-scan fallback.
 
 ## 3. Workspace provider contract suite
 
@@ -138,7 +147,12 @@ Every `WorkspaceProvider` implementation must pass the same behavioral suite.
 - permission loss;
 - offline and reconnection;
 - throttling/quota errors;
-- revision stability and hash behavior.
+- revision stability and hash behavior;
+- stable provider entry identity and rename/move mapping;
+- metadata-only lookup without content reads;
+- incremental scan batches where supported;
+- duplicate-path collision reporting;
+- local weak metadata fingerprint versus strong pre-write hash behavior.
 
 The suite may use provider-specific fixtures but must assert shared outcomes.
 
@@ -185,7 +199,13 @@ For every released schema version:
 - verify the original data remains recoverable;
 - verify logout lock and relogin unlock behavior;
 - verify “remove local data” deletes intended stores only;
-- verify cache rebuild cannot delete provider content.
+- verify cache rebuild cannot delete provider content;
+- migrate legacy plaintext Drive search/cache records without retaining rebuildable plaintext;
+- preserve and encrypt legacy dirty drafts/history before deleting originals;
+- import a legacy encrypted Drive mirror only when path and revision match;
+- isolate one corrupt record without clearing unrelated or irreplaceable data;
+- verify quota cleanup order and persistent-storage refusal behavior;
+- verify a blocked upgrade coordinates with an older app tab without clearing data.
 
 A release is blocked if it requires users to clear site data to recover from a normal upgrade.
 
@@ -227,6 +247,16 @@ Use three layers:
 Real-provider tests must never use personal production Drive data and must clean up isolated test folders.
 
 Required security cases include state/PKCE validation, redirect URI checks, denied consent, revoked grant, expired access token, refresh failure, and cross-user token mix-up prevention.
+
+Drive cache/change tests additionally assert:
+
+- a revision-equal warm read makes no `alt=media` request;
+- one changed document makes one required content request;
+- the initial start-token/full-scan/change replay boundary loses no mutation;
+- a changes cursor advances only atomically with applied pages;
+- invalid/expired tokens and ambiguous ancestry trigger a scoped full scan;
+- trashed/permanently removed entries, moves, and duplicate names map to explicit domain states;
+- the protected staging smoke suite uses a synthetic selected folder and validates the actual `drive.file`/Picker behavior.
 
 ## 8. Browser and device matrix
 
@@ -298,7 +328,9 @@ Maintain representative corpora:
 - editor input latency during render;
 - file-tree mount, scroll, expand, and update;
 - index build, incremental update, query latency, and storage size;
-- workspace startup from cold scan and warm cache;
+- workspace startup from cold scan and warm cache, including time to cached interactivity;
+- Drive metadata request count, content download count/bytes, cache hit/miss count, and priority-queue latency;
+- encrypted 10,000-entry manifest load/decrypt/parse cost and candidate record layouts;
 - sync reconciliation and queue throughput;
 - browser storage usage and history thinning.
 
@@ -307,6 +339,9 @@ Maintain representative corpora:
 - Representative 1 MB render: at most 100 ms on defined target hardware.
 - Representative 10 MB render: at most 750 ms on defined target hardware.
 - UI interactions must remain responsive because expensive work is off the main thread.
+- On defined lower-end mobile benchmark hardware, a cached 10,000-entry workspace reaches an interactive tree, tabs, active document, and warm search state within one second.
+- Warm Drive startup with no changes performs zero Markdown content downloads.
+- One changed remote Markdown document requires at most one content download.
 
 Record hardware/browser/version with benchmark results. CI trend detection may use stable benchmark runners; mobile release checks may be scheduled/manual if CI variance is too high.
 
@@ -369,6 +404,8 @@ V1 is blocked by any of the following:
 - provider contract failure;
 - silent overwrite or unrecoverable conflict path;
 - migration data loss;
+- warm startup downloading unchanged Drive Markdown;
+- cached 10,000-entry mobile startup exceeding the one-second budget without an approved recorded exception;
 - critical/high unresolved security finding;
 - primary-flow WCAG 2.2 AA failure;
 - hard performance-budget regression without an approved recorded decision;

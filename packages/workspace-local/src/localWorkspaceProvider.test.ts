@@ -54,6 +54,15 @@ class MemoryFileHandle {
     this.bytes = new TextEncoder().encode(text);
     this.lastModified += 1;
   }
+
+  /**
+   * Replaces equal-length bytes without changing weak metadata.
+   * @param text Equal-length UTF-8 content.
+   * @returns Nothing after mutation.
+   */
+  mutatePreservingMetadata(text: string): void {
+    this.bytes = new TextEncoder().encode(text);
+  }
 }
 
 class MemoryDirectoryHandle {
@@ -178,6 +187,19 @@ describe("LocalWorkspaceProvider contract", () => {
     await expect(provider.readDocument("daily/moved.md")).rejects.toMatchObject({ code: "not-found" });
     await provider.restore(trashed.token);
     expect((await provider.readDocument("daily/moved.md")).content).toBe("external");
+  });
+
+  it("uses weak metadata for reads but retains a strong pre-write hash", async () => {
+    const root = new MemoryDirectoryHandle("notes");
+    const file = new MemoryFileHandle("same.md", new TextEncoder().encode("one"));
+    root.children.set(file.name, file);
+    const provider = new LocalWorkspaceProvider(root as unknown as FileSystemDirectoryHandle);
+    const original = await provider.readDocument("same.md");
+    const metadata = await provider.getEntryMetadata({ entryId: "same.md" });
+    expect(metadata.metadataFingerprint?.id).toBe(original.metadataFingerprint?.id);
+    file.mutatePreservingMetadata("two");
+    expect((await provider.getEntryMetadata({ path: "same.md" })).metadataFingerprint?.id).toBe(metadata.metadataFingerprint?.id);
+    await expect(provider.writeDocument({ ...original, content: "local", expectedRevision: original.revision })).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("preserves a UTF-8 BOM and CRLF line endings", async () => {

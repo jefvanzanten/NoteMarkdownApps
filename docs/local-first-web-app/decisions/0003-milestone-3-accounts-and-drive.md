@@ -17,4 +17,6 @@ Accepted for milestone 3.
 
 ## Follow-up for milestone 4
 
-Durable sync queues, wrapped-key re-unlock, complete image mirroring, incremental Drive change discovery, and three-way conflict handling remain milestone 4 work.
+ADR 0004 accepts the central encrypted document repository, per-document pending writes, priority reconciliation, and incremental Drive change discovery. Wrapped-key re-unlock, complete image mirroring, the generalized durable operation queue, and three-way conflict handling remain milestone 4 work.
+
+See [ADR 0004 — Local-first workspace cache and priority reconciliation](0004-local-first-workspace-cache-and-priority-reconciliation.md).

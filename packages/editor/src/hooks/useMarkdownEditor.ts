@@ -20,6 +20,7 @@ export interface UseMarkdownEditorOptions {
   onSave?: (sessionId: string, value: string, cursor: number) => void;
   keybindings?: EditorKeybindings;
   spellCheck?: boolean;
+  readOnly?: boolean;
   initialCursor?: number;
 }
 
@@ -29,6 +30,7 @@ export interface UseMarkdownEditorOptions {
  * @param requestSave Immediate save callback.
  * @param keybindings Optional command binding overrides.
  * @param spellCheck Whether browser-native spelling is enabled.
+ * @param readOnly Whether editing is blocked by an external lease.
  * @returns CodeMirror extensions for the Markdown editor.
  */
 function buildExtensions(
@@ -36,6 +38,7 @@ function buildExtensions(
   requestSave: (view: EditorView) => void,
   keybindings: EditorKeybindings,
   spellCheck: boolean,
+  readOnly: boolean,
 ): Extension[] {
   return [
     history(),
@@ -59,7 +62,9 @@ function buildExtensions(
     editorTheme,
     createCommandKeymap(keybindings, { requestSave }),
     keymap.of(defaultKeymap),
-    EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false" }),
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", "aria-readonly": readOnly ? "true" : "false" }),
     drawSelection(),
     highlightActiveLine(),
     EditorView.lineWrapping,
@@ -82,6 +87,7 @@ export function useMarkdownEditor({
   onSave,
   keybindings = {},
   spellCheck = true,
+  readOnly = false,
   initialCursor = 0,
 }: UseMarkdownEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -125,7 +131,7 @@ export function useMarkdownEditor({
       onSaveRef.current?.(sessionIdRef.current, value, cursor);
     };
 
-    const extensions = buildExtensions(queueChange, requestSave, keybindings, spellCheck);
+    const extensions = buildExtensions(queueChange, requestSave, keybindings, spellCheck, readOnly);
     extensionsRef.current = extensions;
 
     const view = new EditorView({

@@ -9,6 +9,7 @@
 - Local workspaces require no account.
 - Explicit account deletion removes NoteMarkdown identity, sessions, connected-account credentials, preferences, and Drive workspace references, but never provider files.
 - Self-hosters must be able to disable all non-operational telemetry.
+- Encrypt all sensitive Drive-derived browser data at rest, including document content, drafts, history, search sources/indexes, pending operations, file names, paths, and directory relationships. Only the minimum opaque envelope needed to locate and unlock ciphertext may remain outside that boundary.
 
 ## 2. Security
 
@@ -68,7 +69,7 @@
 
 ### Status and errors
 
-- Saving and synchronization state must be visible and understandable: saving, saved, offline, queued, syncing, conflict, retrying, or blocked.
+- Saving and synchronization state must be visible and understandable: saving, saved, checking, offline, queued, syncing, conflict, retrying, incomplete, permission-required, locked, or blocked.
 - Never use a success state before local durability is confirmed.
 - Never hide a failed or conflicted provider write behind a generic “saved” label.
 - Errors must explain whether work is safe locally and what the user can do next.
@@ -79,6 +80,7 @@
 - Permanent deletion requires an explicit separate action.
 - Rename/move previews all workspace-wide reference changes before confirmation when the operation is nontrivial.
 - Multi-file path transactions are atomic from the user's perspective and recoverable through history where feasible.
+- A remotely deleted clean tab may close with a short “go up in smoke” transition. A dirty tab may use the same transition only after its draft is durably moved to a persistent recovery view. The transition must respect `prefers-reduced-motion` and preserve accessible status messaging.
 
 ## 6. Accessibility
 
@@ -133,6 +135,8 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - File trees and search results must be virtualized when needed.
 - Scanning and indexing are incremental and worker-based.
 - Syntax highlighters load only for languages present in rendered code blocks.
+- On defined lower-end mobile benchmark hardware, a cached 10,000-entry workspace must restore its tree, tabs, active cached document, and warm search state to an interactive UI within one second, without waiting for provider I/O.
+- A warm Drive start with no changes performs zero Markdown content downloads. One changed remote Markdown document causes at most one required content download.
 
 ## 10. Reliability and local-first behavior
 
@@ -146,6 +150,11 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - Preserve both sides until a conflict is explicitly resolved.
 - PWA updates never force-reload an active session; prompt after work is safe.
 - All persistent browser schema changes require forward migrations and recovery tests.
+- Warm startup uses the local manifest and repository immediately, then reconciles remotely in bounded priority batches: active document, open tabs, pending writes/conflicts, then remaining new or changed documents.
+- Opening a cached document never waits for its remote revision check. The UI marks it as checking; edits become durable locally and provider writes wait for revision verification.
+- Confirmed remote deletion closes clean tabs promptly. Dirty content is retained as a recovery item and never silently discarded.
+- Only one app tab leads synchronization for a workspace, and only one tab holds a document editing lease at a time.
+- Hidden app tabs pause low-priority reconciliation; offline, data-saver, throttling, and quota states degrade without blocking local editing.
 
 ## 11. History and retention
 
@@ -155,6 +164,7 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - Default trash retention is 30 days.
 - Local workspace history is device-local and must not add hidden history directories to the real workspace.
 - Drive provider revisions may supplement, not replace, local recovery history.
+- Under quota pressure, evict rebuildable index artefacts first and then least-recently-used clean unopened content. Never automatically evict drafts, pending operations, conflicts, required base versions, open documents, or recovery items.
 
 Exact snapshot cadence and quota thresholds are implementation parameters that require test data before final defaults.
 
@@ -166,6 +176,7 @@ Exact snapshot cadence and quota thresholds are implementation parameters that r
 - A non-empty search replaces the file tree with results; clearing it restores the tree.
 - Search indexes never leave the device.
 - Detect broken internal Markdown links and missing supported images.
+- A warm index is available immediately and clearly marked while revisions are being reconciled. Confirmed deletions are removed promptly; changed documents are replaced incrementally.
 - Diagnostics must remain usable at the target workspace size.
 
 ## 13. Settings

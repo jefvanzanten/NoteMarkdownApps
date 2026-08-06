@@ -36,7 +36,7 @@ Full local-directory behavior is capability-dependent and primarily available in
 
 ### Drive workspace
 
-A workspace whose provider source is one explicitly selected Google Drive folder. It is not the entire Drive. The browser keeps a durable local mirror for offline work and reconciles it with Drive while the app is open.
+A workspace whose provider source is one explicitly selected Google Drive folder. It is not the entire Drive. The browser keeps a durable encrypted local document repository for offline work and reconciles it with Drive while the app is open.
 
 ### Browser-only workspace
 
@@ -52,15 +52,19 @@ Provider capability differences must be explicit. The core must not infer provid
 
 The externally visible files controlled by the selected provider: a real local directory or Drive folder. The backend is never a provider source.
 
-### Local mirror
+### Local document repository
 
-A browser-resident working copy of Drive workspace content used for offline access, local-first writes, and synchronization. It is encrypted and tied to the account/device lifecycle.
+The single browser-resident read model for cached provider documents. It stores content together with provider identity, path, cached-content revision, observed-provider revision, format, and processing generations. The provider source remains canonical; dirty drafts, pending writes, conflicts, and recovery items are durable non-rebuildable records with precedence over clean cached content.
 
-A local workspace may also cache content for recovery and indexing, but its real directory remains primary.
+For Drive workspaces, sensitive repository data is encrypted and tied to the account/device lifecycle. A local workspace may use the same repository after filesystem permission is confirmed, but its real directory remains primary.
+
+### Workspace manifest
+
+The durable local metadata snapshot for one workspace. It maps provider entry identities to paths, kinds, parent relationships, metadata fingerprints, observed revisions, deletion/collision state, and sync cursor state. A manifest permits immediate tree restoration without claiming that its last observation is current provider state.
 
 ### Cache
 
-Rebuildable local data used to improve performance, such as parsed metadata, tree state, rendered results, and fetched images. Deleting only a cache must not destroy the provider files.
+Rebuildable local data used to improve performance, such as clean document copies, parsed metadata, tree state, rendered results, and index artefacts. Deleting only a cache must not destroy provider files or non-rebuildable drafts, pending writes, conflicts, base versions, or recovery items.
 
 ### Draft
 
@@ -68,7 +72,23 @@ A durable local representation of editor changes that may not yet have reached t
 
 ### Revision
 
-A known version of a file. A revision may be represented by Drive revision metadata, local file metadata plus a content hash, or a local history ID.
+A known version of a file. A revision may be represented by Drive revision metadata, a strong local content hash, or a local history ID.
+
+### Metadata fingerprint
+
+A lightweight provider observation used to decide whether stronger work may be necessary. Drive version/checksum metadata can identify content revisions; a local `lastModified + size` fingerprint is weaker and never replaces a strong pre-write content-hash check.
+
+### Observed provider revision
+
+The newest provider revision seen in metadata. It may be newer than the locally cached content while a content download is queued.
+
+### Cached-content revision
+
+The provider revision represented by the content currently stored in the local document repository. It advances only after the matching content is durably committed.
+
+### Index revision
+
+The cached-content revision or generation that search and diagnostics have processed. It is tracked separately so stale derived data is never presented as fully reconciled.
 
 ### Base revision
 
@@ -88,7 +108,19 @@ A durable intended provider mutation: create, update, rename, move, trash, resto
 
 ### Sync queue
 
-The ordered set of pending Drive operations. It is processed only while the app is open. It survives reloads and network loss.
+The ordered set of pending provider operations. At minimum, each dirty document has an idempotent durable pending-write record with its expected base revision. It is processed only while the app is open and survives reloads and network loss.
+
+### Sync leader
+
+The single app tab that owns workspace reconciliation and general background batches. Other tabs consume durable cache updates and communicate through browser coordination primitives.
+
+### Editing lease
+
+A per-document browser-tab lease that prevents two app tabs from silently overwriting the same local draft. Another tab may read the document and explicitly take over editing.
+
+### Recovery item
+
+Durable, user-actionable content retained after the original provider entry is no longer writable or present. For example, a dirty tab may visually close after confirmed remote deletion while its draft remains restorable as a new file.
 
 ### Synchronization
 
@@ -210,11 +242,15 @@ Opt-in client crash and performance data, including appropriately bucketed works
 8. Conflicts preserve base, local, and remote inputs until resolved.
 9. Deletion is recoverable until retention expiry or explicit permanent deletion.
 10. Search and diagnostics are computed locally.
-11. Explicit logout locks retained Drive mirror content.
+11. Explicit logout locks retained Drive repository content.
 12. Account deletion never deletes provider files.
 13. Global settings are the only user-configurable settings scope in v1.
 14. Workspace-specific ignore behavior may be declared by `.notemarkdownignore`; that file is workspace content, not a global setting.
 15. File-management transactions that change paths update known internal references or fail without partial silent corruption.
+16. Warm startup reads local durable state before remote reconciliation and never treats an unverified cached observation as current provider truth.
+17. Observed-provider, cached-content, and index revisions advance independently and in transactionally safe order.
+18. One workspace sync leader and one editing lease per document prevent browser tabs from racing local or provider state.
+19. Confirmed provider deletion never discards a dirty draft; it becomes an explicit recovery item.
 
 ## Common state vocabularies
 

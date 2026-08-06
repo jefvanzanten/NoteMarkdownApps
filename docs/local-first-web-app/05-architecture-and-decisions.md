@@ -38,7 +38,7 @@ Responsibilities:
 - workspace UI, tabs, file tree, search, editor, preview, history, and conflicts;
 - browser persistence and migrations;
 - local workspace provider;
-- Drive content client and local mirror;
+- Drive content client and local document repository orchestration;
 - workers and WASM orchestration;
 - global preferences and API client;
 - service worker and update lifecycle.
@@ -111,18 +111,21 @@ It receives short-lived access tokens through an interface; it does not own API 
 
 ### `@note/sync-core`
 
-- Durable operation model.
-- Queue scheduler and retries.
-- Reconciliation state machine.
+- Durable operation model, including per-document pending writes.
+- Bounded priority queue, request deduplication, retries, backoff, and cancellation generations.
+- Reconciliation state machine with separate observed-provider, cached-content, and index generations.
+- Workspace sync-leader and document editing-lease coordination contracts.
 - Three-way merge orchestration.
-- Conflict lifecycle.
+- Conflict and destroyed-draft recovery lifecycle.
 
 ### `@note/browser-storage`
 
-- Versioned IndexedDB/OPFS schemas.
-- Drafts, mirrors, base revisions, queue, history, indexes, session state, and migrations.
-- Quota and retention policy primitives.
-- Encryption boundary for retained Drive data.
+- Versioned IndexedDB/OPFS schemas and forward-only migrations.
+- The single local document repository and encrypted workspace manifests.
+- Drafts, observed/cached/base revisions, pending writes, conflicts, recovery items, history, indexes, sessions, sync cursors, and migration quarantine.
+- Atomic per-document commit APIs and corruption isolation.
+- Adaptive quota and least-recently-used retention primitives.
+- Encryption boundary for all sensitive retained Drive-derived data.
 
 ### `@note/markdown-wasm`
 
@@ -209,7 +212,11 @@ A separate lazy-loaded browser highlighter processes only code languages present
 
 ## 7. Workspace provider contract
 
-The contract should expose semantic operations rather than raw provider APIs. Illustrative capabilities include:
+The contract exposes semantic operations rather than raw provider APIs. Cache lookup does not live in a provider: providers perform provider I/O, while the document repository and reconciler decide when I/O is necessary.
+
+The existing contract is extended additively so current consumers keep working. Entries may expose a stable provider entry ID, revision/fingerprint, parent identity, and deletion/collision metadata. Providers may additionally expose metadata-only lookup by stable identity and an incremental scan-batch API; `listEntries()` remains the compatibility fallback.
+
+Illustrative capabilities include:
 
 ```text
 identify workspace
@@ -218,8 +225,9 @@ create/write with expected revision
 create directory
 rename/move with expected source revision
 trash/restore/permanently delete
-read provider revision metadata
-scan/discover changes
+read provider revision metadata by stable identity
+stream metadata scan batches
+scan/discover changes with an opaque cursor
 request/recheck permission
 resolve provider asset URL/blob
 report capability flags
@@ -227,7 +235,7 @@ report capability flags
 
 Every mutating method returns a new revision or a typed conflict/error. Provider errors map to shared categories such as permission, offline, throttled, quota, conflict, unsupported, not found, and fatal.
 
-The core never implements “last write wins.”
+The core never implements “last write wins.” Drive IDs provide stable identity across rename/move. Local providers fall back to normalized paths and preserve identity for app-initiated path transactions where possible. Duplicate Drive names remain separate IDs but enter an explicit path-collision state until the user resolves them.
 
 ## 8. Local-first write path
 
@@ -245,20 +253,34 @@ CodeMirror change
 
 `Ctrl/Cmd+S` skips the provider debounce but not local persistence, revision checks, or queue durability.
 
-## 9. Drive synchronization flow
+## 9. Workspace activation and synchronization flow
 
-1. Load the encrypted local mirror and durable operation queue.
+### Warm activation
+
+1. Open browser storage and unlock the workspace repository where policy permits.
+2. Load the workspace manifest, session, active cached document, open tabs, warm search state, drafts, recovery items, and pending writes.
+3. Render immediately. Local-directory content remains gated by current filesystem permission; an unlocked Drive cache may remain editable while provider reauthentication is pending.
+4. Elect one workspace sync leader. Other browser tabs consume repository updates.
+5. Queue metadata checks in order: active document, other open tabs, pending writes/conflicts, then remaining manifest reconciliation.
+6. Compare observed-provider revisions with cached-content revisions. Unchanged content is read from the repository and never downloaded.
+7. Download each new or changed Markdown document at most once, commit its matching content revision, then update search and diagnostics generations incrementally.
+
+A cached document can be edited while its check runs. The draft and pending-write record become durable immediately, but provider mutation waits for revision verification.
+
+### Drive delta synchronization
+
+1. Load the encrypted repository, manifest, pending operations, and last durable Drive change cursor.
 2. If online and authenticated, obtain a short-lived access token from the API.
-3. Discover Drive changes under the selected folder using Drive-native change/revision mechanisms where feasible.
-4. Compare provider revisions with stored base revisions.
-5. Apply safe remote changes to the mirror.
-6. For local queued changes, write with expected-revision semantics.
-7. If both sides changed, run three-way merge.
-8. Store clean merge automatically; store unresolved merge as conflict.
-9. Update base/mirror/index/history only through transactionally ordered local persistence.
-10. Retry throttled or transient failures with bounded exponential backoff and jitter.
+3. On initial setup, acquire a start page token, perform a full selected-folder scan, and process changes since the initial token so the scan/change boundary cannot lose a mutation.
+4. On normal starts, process `changes.list` pages and commit each applied page together with its next cursor. Never advance a cursor past uncommitted changes.
+5. Filter account-wide visible changes to known workspace IDs/parents and resolve unknown or ambiguous ancestry without indexing the entire Drive.
+6. Fall back to a full selected-folder scan after token invalidation, ambiguous move/ancestry state, or a periodic visible-online safety interval (initially 24 hours, subject to measurement).
+7. For local queued changes, recheck provider revision and write with expected-revision semantics.
+8. If both sides changed, preserve base, local, and remote. The cache phase may expose conflict state before the separate three-way merge work is complete.
+9. Update base, cached content, index/history, and operation acknowledgement only through transactionally ordered persistence.
+10. Retry throttled or transient failures through the bounded scheduler using `Retry-After`, exponential backoff, and jitter.
 
-Operations require stable IDs and idempotency logic so reloads/retries do not duplicate creates or moves.
+Operations require stable IDs and idempotency logic so reloads/retries do not duplicate creates or moves. Hidden app tabs pause low-priority work; current mutations are either safely completed or reconciled on resume.
 
 ## 10. Conflict architecture
 
@@ -278,11 +300,15 @@ The merge algorithm/library is an implementation detail, but behavior is defined
 
 ## 11. Browser persistence
 
+Browser persistence is the one local read repository, not a second provider. Provider content remains canonical, except that unsynchronized drafts, pending operations, conflicts, and recovery items are irreplaceable local state until resolved.
+
+A manifest entry keeps provider identity/path separately from revision progress. At minimum, `observedProviderRevision`, `cachedContentRevision`, and `indexRevision` are distinct. Seeing remote revision `R2` never relabels cached `R1` content as current.
+
 Persistent stores need explicit versioning for:
 
 - workspace references and permissions metadata;
 - document drafts;
-- Drive mirror manifests and blobs;
+- Drive repository manifests and document records;
 - base revisions;
 - sync operations;
 - conflicts;
@@ -290,19 +316,27 @@ Persistent stores need explicit versioning for:
 - trash metadata where applicable;
 - search index/index metadata;
 - tabs and session state;
+- workspace manifests and provider identity/path mappings;
+- observed metadata, cached-content revisions, and processing generations;
+- recovery items, sync-leader leases, and document editing leases;
+- Drive change tokens and safety-scan timestamps;
 - anonymous settings and keybindings;
 - encryption key references and lock state.
 
-Migrations are forward-only per released schema version and tested against realistic prior fixtures. A migration failure must preserve original data for retry/recovery; clearing storage is not an acceptable fallback.
+Migrations are forward-only per released schema version and tested against realistic prior fixtures. A migration failure must preserve original data for retry/recovery; clearing storage is not an acceptable fallback. Rebuildable plaintext Drive search/cache records are purged, irreplaceable drafts/history are encrypted before their originals are removed, and the existing encrypted Drive mirror is imported only when provider path/revision validation succeeds.
+
+Corrupt records are isolated rather than causing a database reset. Under quota pressure, retention removes derived index artefacts and least-recently-used clean unopened content before other rebuildable data. It never automatically removes drafts, pending writes, conflicts, required bases, open documents, or recovery items. Persistent-storage refusal is a supported degraded mode and cache eviction always leads to a valid cold start.
 
 ## 12. Encryption boundaries
 
-### Drive mirror
+### Drive repository
 
-- Encrypt retained Drive document data, derived indexes containing content, history, and pending operations at rest in browser storage.
+- Encrypt retained Drive document data and sensitive derived metadata, including file names, paths, parent relationships, manifests, indexes containing content, drafts, history, conflicts, recovery items, and pending operations at rest in browser storage.
 - Use Web Crypto and a per-account/device key strategy.
 - Explicit logout removes active key access and leaves retained content locked.
 - Provide an explicit “remove local data” action.
+- Keep only the minimum opaque unencrypted envelope required to locate schema/account/workspace ciphertext.
+- If explicit logout occurs while dirty or queued work exists, require clear confirmation. Retained ciphertext remains locked; wrapped-key re-unlock is a separate security design.
 - Offline restart while not explicitly logged out must remain possible; the exact non-extractable key/wrapping design requires threat modeling and browser testing.
 
 ### Backend tokens
@@ -365,6 +399,7 @@ Database backups and restores are part of the supported self-hosting contract.
 ## 16. Observability architecture
 
 - Instrument the API with OpenTelemetry-compatible metrics/traces.
+- Measure cache hits/misses, metadata requests, content downloads/bytes, activation time, manifest load, reconciliation time, queue latency, and indexed-document count locally. External transmission follows the existing aggregate/opt-in consent boundary.
 - Keep OTLP backend configuration deployment-specific.
 - Keep product analytics and crash reporting behind separate adapters.
 - Validate analytics payloads against allowlisted schemas.
@@ -414,6 +449,11 @@ Database backups and restores are part of the supported self-hosting contract.
 | Self-hosting | Official Docker Compose | Confirmed |
 | License | AGPL-3.0 with DCO | Confirmed |
 | Existing apps | Migrate after web v1 | Confirmed |
+| Warm workspace startup | Local manifest/repository renders before remote reconciliation | Confirmed |
+| Cache ownership | One provider-independent local document repository; providers perform I/O only | Confirmed |
+| Reconciliation | Metadata-first bounded priority queue; active/open documents first | Confirmed |
+| Drive discovery | Changes API after initial scan, with cursor recovery and periodic safety scan | Confirmed |
+| Browser-tab coordination | One sync leader per workspace and one editing lease per document | Confirmed |
 
 ## 19. Implementation choices still requiring evidence
 
@@ -427,7 +467,9 @@ These do not reopen product decisions, but must be selected through spikes, benc
 - encryption key wrapping/unlock design;
 - exact Google scopes and Picker flow accepted by Google policy;
 - local trash implementation under File System Access limitations;
-- external-change polling/hash cadence;
+- final adaptive queue concurrency after mobile/provider benchmarks;
+- final external-change polling/hash cadence after validating the initial active-document 30-second, open-tabs 60-second, and safety-scan 24-hour defaults;
+- encrypted manifest record layout (snapshot, per-record, or snapshot-plus-journal) after a 10,000-entry mobile benchmark;
 - autosave and adaptive render debounce values;
 - history thinning and quota defaults;
 - specific OpenTelemetry, analytics, and crash backends;

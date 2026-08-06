@@ -8,6 +8,7 @@ export interface MarkdownEditorProps {
   onSave?: (sessionId: string, value: string, cursor: number) => void;
   keybindings?: EditorKeybindings;
   spellCheck?: boolean;
+  readOnly?: boolean;
   initialCursor?: number;
 }
 

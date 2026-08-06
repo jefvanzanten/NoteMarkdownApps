@@ -11,8 +11,12 @@ import {
   type WorkspaceBinary,
   type WorkspaceDocument,
   type WorkspaceEntry,
+  type WorkspaceEntryMetadata,
+  type WorkspaceEntryTarget,
+  type WorkspaceMetadataFingerprint,
   type WorkspaceProvider,
   type WorkspaceRevision,
+  type WorkspaceScanBatch,
   type WriteDocumentInput,
 } from "@note/workspace-core";
 
@@ -59,6 +63,15 @@ async function createRevision(file: File, bytes: ArrayBuffer): Promise<Workspace
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const id = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   return { id, modifiedAt: file.lastModified, size: file.size };
+}
+
+/**
+ * Creates a cheap local metadata fingerprint without reading file content.
+ * @param file Provider file snapshot.
+ * @returns Weak startup fingerprint used only to decide whether content needs verification.
+ */
+function createMetadataFingerprint(file: File): WorkspaceMetadataFingerprint {
+  return { id: `${file.lastModified}:${file.size}`, modifiedAt: file.lastModified, size: file.size };
 }
 
 /**
@@ -187,10 +200,54 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       const file = await handle.getFile();
       const bytes = await file.arrayBuffer();
       const decoded = decodeDocument(bytes);
-      return { path: normalizedPath, ...decoded, revision: await createRevision(file, bytes) };
+      return {
+        path: normalizedPath,
+        ...decoded,
+        revision: await createRevision(file, bytes),
+        entryId: normalizedPath,
+        metadataFingerprint: createMetadataFingerprint(file),
+      };
     } catch (error) {
       throw mapFileSystemError(error, `Could not read ${normalizedPath}.`);
     }
+  }
+
+  /**
+   * Reads weak file metadata without reading content bytes.
+   * @param target Stable normalized path identity and/or current path.
+   * @returns Current local metadata fingerprint.
+   */
+  async getEntryMetadata(target: WorkspaceEntryTarget): Promise<WorkspaceEntryMetadata> {
+    const normalizedPath = normalizeWorkspacePath(target.path ?? target.entryId ?? "");
+    try {
+      const file = await (await this.getFileHandle(normalizedPath)).getFile();
+      const name = normalizedPath.split("/").at(-1) ?? normalizedPath;
+      const kind = classifyWorkspaceEntry(name, false);
+      if (!kind) throw new WorkspaceError("unsupported", `${normalizedPath} is not a supported workspace entry.`);
+      return {
+        entryId: normalizedPath,
+        path: normalizedPath,
+        kind,
+        parentEntryId: workspaceDirname(normalizedPath) || undefined,
+        metadataFingerprint: createMetadataFingerprint(file),
+        state: "live",
+      };
+    } catch (error) {
+      throw mapFileSystemError(error, `Could not inspect ${normalizedPath}.`);
+    }
+  }
+
+  /**
+   * Returns one bounded compatibility scan batch.
+   * @param cursor Opaque top-level offset from a previous batch.
+   * @returns Deterministic top-level entries.
+   */
+  async scanEntries(cursor?: string): Promise<WorkspaceScanBatch> {
+    const entries = await this.listEntries();
+    const offset = Math.max(0, Number(cursor ?? 0) || 0);
+    const batch = entries.slice(offset, offset + 250);
+    const nextOffset = offset + batch.length;
+    return { entries: batch, cursor: nextOffset < entries.length ? String(nextOffset) : undefined, done: nextOffset >= entries.length };
   }
 
   /**
@@ -400,10 +457,15 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       const kind = classifyWorkspaceEntry(name, handle.kind === "directory");
       if (!kind) continue;
       const path = joinWorkspacePath(parentPath, name);
+      const file = handle.kind === "file" ? await handle.getFile() : null;
       entries.push({
         kind,
         name,
         path,
+        entryId: path,
+        parentEntryId: parentPath || undefined,
+        metadataFingerprint: file ? createMetadataFingerprint(file) : undefined,
+        state: "live",
         children: handle.kind === "directory" ? await this.listDirectory(handle, path) : undefined,
       });
     }

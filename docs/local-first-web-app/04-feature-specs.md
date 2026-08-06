@@ -16,18 +16,21 @@ Open the editor quickly and continue where work stopped.
 ### Requirements
 
 - Attempt to reopen the last active workspace at launch.
-- Restore it only if filesystem permission or Drive identity/mirror state permits safe access.
+- Restore it only if filesystem permission or Drive identity/repository lock state permits safe access.
 - Otherwise show a workspace screen with recent workspaces and actions to open or create one.
 - Remember multiple workspace references, but activate only one per app window.
 - Switching workspace closes the active workspace context only after drafts and queue state are durable.
 - Local workspace actions do not require login.
 - Drive actions trigger Google authentication only when necessary.
+- Restore a usable local manifest, tabs, active cached document, and warm search state before remote reconciliation. A local-directory cache remains locked until filesystem permission is confirmed; an encrypted Drive cache remains usable when its device key is available even if reauthentication is required for sync.
+- Reconcile through one bounded priority queue: active document, other open tabs, pending writes/conflicts, then remaining new or changed documents.
 
 ### Acceptance criteria
 
 - Relaunch restores the last usable workspace without unnecessary navigation.
 - Revoked permission produces a clear reauthorization action, not data loss.
 - Switching cannot mix tabs, indexes, histories, or sync operations between workspaces.
+- On defined lower-end mobile benchmark hardware, a cached 10,000-entry workspace is interactive within one second without waiting for remote I/O.
 
 ## F02 — Local directory workspace
 
@@ -63,18 +66,22 @@ Use one Drive folder as a cross-device, cross-browser Markdown workspace.
 - Never index the user's entire Drive.
 - Remember linked folder IDs and display names through the API.
 - Transfer files directly between browser and Drive using short-lived credentials.
-- Maintain a local encrypted mirror of all `.md` files and referenced images.
+- Maintain one local encrypted document repository and workspace manifest. All Drive-derived content and sensitive metadata, including names, paths, indexes, drafts, history, and pending operations, follow the repository locking rules.
+- Mirror Markdown in background priority order. Keep image metadata in the manifest; load image binaries lazily until the milestone-4 image-mirroring work enables referenced-image mirroring and optional pinning.
 - Load other supported images on demand and permit explicit offline pinning.
 - Synchronize only while the app is open: at open, during use, and after reconnection.
-- Expose queue, progress, errors, retry, and conflict states.
+- Expose queue, progress, checking, incomplete-index, errors, retry, and conflict states.
+- Use metadata-first revision checks and download content only when the observed provider revision differs from the cached-content revision.
+- After initialization, use Drive Changes tokens for normal delta discovery. Fall back to a full scan for missing/invalid tokens, ambiguous ancestry changes, and a periodic visible-online safety check.
 - In-app Drive sharing management is not provided.
 
 ### Acceptance criteria
 
 - Document/image payloads never reach the NoteMarkdown API.
 - A linked workspace reappears on another device after login.
-- The cached workspace remains usable offline according to mirror rules.
-- Explicit logout locks retained mirror content.
+- The cached workspace remains usable offline according to repository retention and locking rules.
+- Explicit logout locks retained repository content.
+- A warm start with no remote changes downloads zero Markdown content; one changed document causes at most one required content download.
 
 ## F04 — File sidebar
 
@@ -137,12 +144,16 @@ Work across several documents and return to the same context later.
 - Track active tab and per-tab cursor, selection, editor scroll, preview scroll, and view mode.
 - Restore tabs and layout per workspace after reload/relaunch.
 - Handle externally deleted, moved, or conflicted open files without crashing or losing the local buffer.
+- Give the active document and open tabs immediate metadata-check priority. A confirmed remote delete closes the tab with a brief accessible “go up in smoke” transition; a dirty draft first becomes a persistent recovery item.
+- Keep a stable Drive document open across remote rename/move and transactionally update all path-dependent state.
+- Enforce one editing lease per document across browser tabs; non-owning tabs open read-only and may explicitly take over.
 - Keep the active tab reachable on narrow screens.
 
 ### Acceptance criteria
 
 - Relaunch returns to the prior active document and relevant position.
 - Restored state never opens a document from a different workspace identity.
+- A destroyed dirty draft remains discoverable and restorable as a new file until the user explicitly removes it.
 
 ## F07 — Shared Markdown editor
 
@@ -228,6 +239,7 @@ Avoid losing work without repeatedly invoking Save.
 ### Requirements
 
 - Persist changes to a local draft after a short debounce.
+- Persist an idempotent pending-write record with the expected base revision for every document intended for provider synchronization.
 - Write local-provider content or enqueue Drive writes after local durability.
 - Make `Ctrl/Cmd+S` request immediate processing.
 - Show distinct local-persistence and provider-sync states where relevant.
@@ -238,7 +250,8 @@ Avoid losing work without repeatedly invoking Save.
 ### Acceptance criteria
 
 - Closing/reopening after a network failure recovers typed Drive changes.
-- A provider revision mismatch routes to merge rather than overwrite.
+- A provider revision mismatch preserves base, local, and remote inputs and routes to conflict/merge rather than overwrite.
+- Editing from an unverified warm cache remains locally durable, while its provider write waits for metadata verification.
 
 ## F11 — Offline behavior and synchronization
 
@@ -249,19 +262,23 @@ Keep working without a network and reconcile safely later.
 ### Requirements
 
 - Cache the PWA shell and Rust/WASM assets for offline launch.
-- Make all mirrored Drive Markdown and referenced images available offline.
+- Make all retained Drive Markdown and referenced images available offline according to repository retention and pinning policy.
 - Persist sync operations durably.
 - On reconnection while open, automatically discover remote changes and process the queue.
 - Keep a manual sync/retry action.
 - Continue syncing unrelated files when one file conflicts where safe.
 - Do not claim closed-PWA background synchronization.
-- Handle Drive throttling with bounded backoff and visible status.
+- Handle Drive throttling with bounded backoff, jitter, `Retry-After`, request deduplication, and visible status.
+- Keep observed-provider revision, cached-content revision, and index revision separate. Never advance the content/index revision before matching data is durably committed.
+- Pause low-priority content downloads when the app is hidden or data-saver/very-slow-network signals are active. Continue priority revision checks and user-requested synchronization where possible.
+- Elect one sync leader per workspace across browser tabs; followers consume durable updates instead of duplicating provider scans.
 
 ### Acceptance criteria
 
 - Offline edits survive reload and synchronize after reconnection.
 - Retried operations are idempotent and do not create duplicate files.
 - One conflict does not silently discard later operations.
+- Reconnect processes active/open documents and pending writes before background index completeness work.
 
 ## F12 — Conflict resolution
 
@@ -301,13 +318,15 @@ Find information quickly in large workspaces without uploading content.
 - Support exact phrases in quotation marks.
 - Show file and contextual text snippets.
 - Open results in tabs.
-- Keep index data local and apply Drive-mirror locking rules.
+- Keep index data local and apply Drive-repository locking rules.
+- Load the warm index immediately, track the revision/generation represented by each indexed document, and reconcile changed or removed documents incrementally.
 - Regex and fuzzy matching are outside v1.
 
 ### Acceptance criteria
 
 - Search remains interactive at approximately 10,000 files.
 - Deleted/trash content does not appear as a normal live result.
+- Search remains available during reconciliation and clearly indicates when background updates are incomplete.
 - Search cannot leak content through API, analytics, logs, or URLs.
 
 ## F14 — Version history and trash
@@ -344,6 +363,7 @@ Discover broken relationships before they are encountered manually.
 - Mark problems in editor/preview without blocking editing.
 - Provide a workspace-level diagnostics view reachable without a command palette.
 - Recalculate incrementally after path and content changes.
+- Track diagnostics generations separately from observed metadata so a stale warm result is never represented as fully reconciled.
 
 ### Acceptance criteria
 
@@ -384,11 +404,14 @@ Install NoteMarkdown and use it like a desktop application.
 - Show an update prompt rather than force reloading.
 - Enable reload only after current drafts and operation queues are durably safe.
 - Keep local persistent schema migrations compatible across app versions.
+- Coordinate schema upgrades across app tabs. A blocked upgrade asks older tabs to close/update and never clears site data.
+- During the workspace-cache migration, purge rebuildable plaintext Drive search/cache data, transactionally encrypt irreplaceable drafts/history, and import existing encrypted mirror content only after its revision is matched.
 
 ### Acceptance criteria
 
 - An update during active offline editing cannot lose work.
 - A failed migration enters recoverable error handling rather than clearing storage.
+- Corrupt cache records are isolated. Rebuildable records may be refetched, while drafts, pending writes, conflicts, base versions, and recovery items are retained for explicit recovery.
 
 ## F18 — Authentication, account, and preferences
 

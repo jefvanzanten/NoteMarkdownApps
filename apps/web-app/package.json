@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@note/api-contracts": "workspace:*",
+    "@note/browser-storage": "workspace:*",
     "@note/editor": "workspace:*",
     "@note/markdown-wasm": "workspace:*",
+    "@note/sync-core": "workspace:*",
     "@note/workspace-core": "workspace:*",
     "@note/workspace-local": "workspace:*",
     "@note/workspace-drive": "workspace:*",

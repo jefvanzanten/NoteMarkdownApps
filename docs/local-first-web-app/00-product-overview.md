@@ -38,6 +38,7 @@ The public product may later serve many users, but v1 does not include billing o
 7. **Safe by default** — no raw HTML, no executable SVG, no silent conflict overwrite, and recoverable deletion.
 8. **Portable deployment** — the official service and self-hosted installations use the same provider-independent architecture.
 9. **Shared foundations** — editor and workspace capabilities live in packages that existing NoteMarkdown apps can adopt later.
+10. **Instant return** — a cached workspace becomes interactive from local durable state before remote reconciliation completes; remote providers are never on the warm-start render path.
 
 ## Primary user journeys
 
@@ -61,8 +62,9 @@ The public product may later serve many users, but v1 does not include billing o
 
 1. Launch the installed PWA or website.
 2. Reopen the last workspace when permission and identity allow it.
-3. Restore tabs, active document, cursor, scroll positions, sidebar dimensions, and Editor/Preview mode.
-4. Reconcile external and remote changes without blocking unrelated documents.
+3. Restore the local workspace manifest, tabs, active cached document, search index, cursor, scroll positions, sidebar dimensions, and Editor/Preview mode without waiting for remote I/O; Drive-derived sensitive state is encrypted.
+4. Prioritize revision checks for the active document and open tabs, then reconcile the rest of the workspace in bounded background batches.
+5. Download and re-index only new or changed Markdown content; unchanged content remains in the local cache.
 
 ## Main experience
 
@@ -143,6 +145,7 @@ Account deletion removes NoteMarkdown account data and provider connections, nev
 - Accessible, responsive, bilingual PWA.
 - Multi-user-safe hosted API and supported Docker Compose self-hosting.
 - Reliable migrations, tests, observability, and upgrade behavior.
+- A warm 10,000-entry workspace that is locally interactive within one second on defined lower-end mobile benchmark hardware and performs no content download for unchanged Drive Markdown.
 
 ## Explicit non-goals for v1
 

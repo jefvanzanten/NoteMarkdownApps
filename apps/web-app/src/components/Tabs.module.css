@@ -51,7 +51,24 @@
 .tab:focus-visible,
 .close:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
 .status { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; background: transparent; }
-.status[data-state="dirty-local"] { background: var(--color-warning); }
+.status[data-state="checking"] { border: 1px solid var(--color-accent); }
+.status[data-state="dirty-local"],
+.status[data-state="queued"] { background: var(--color-warning); }
 .status[data-state="persisting-local"] { background: var(--color-accent); }
 .status[data-state="conflicted"],
+.status[data-state="destroyed"],
 .status[data-state="error-blocking"] { background: var(--color-danger); }
+
+.tabGroup:has(.status[data-state="destroyed"]) {
+  pointer-events: none;
+  animation: destroy-tab 320ms ease-in forwards;
+}
+
+@keyframes destroy-tab {
+  0% { opacity: 1; filter: blur(0); transform: translateY(0) scale(1); }
+  100% { opacity: 0; filter: blur(4px); transform: translateY(-0.7rem) scale(0.82); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabGroup:has(.status[data-state="destroyed"]) { animation: none; opacity: 0.45; }
+}

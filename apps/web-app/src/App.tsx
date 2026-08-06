@@ -6,6 +6,7 @@ import { detectLocale, translate, type Locale } from "./i18n";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { FileTree } from "./components/FileTree";
 import { MarkdownPreview } from "./components/MarkdownPreview";
+import { RecoveryDialog } from "./components/RecoveryDialog";
 import { RecoveryToast } from "./components/RecoveryToast";
 import { Tabs } from "./components/Tabs";
 import { Welcome } from "./components/Welcome";
@@ -70,9 +71,13 @@ function useAutosave(tabs: OpenDocument[], saveDocument: (path: string) => Promi
  * @returns User-facing save status.
  */
 function saveStatus(document: OpenDocument, locale: Locale): string {
+  if (document.editingState === "read-only") return translate(locale, "readOnlyLease");
   switch (document.saveState) {
+    case "checking": return translate(locale, "checking");
     case "dirty-local": return translate(locale, "dirty");
     case "persisting-local": return translate(locale, "saving");
+    case "queued": return translate(locale, "queued");
+    case "destroyed": return translate(locale, "removedExternally");
     case "conflicted": return translate(locale, "conflict");
     case "error-blocking": return translate(locale, "saveError");
     default: return translate(locale, "saved");
@@ -103,6 +108,7 @@ export function App() {
   const error = useWorkspaceStore((state) => state.error);
   const lastTrash = useWorkspaceStore((state) => state.lastTrash);
   const diagnostics = useWorkspaceStore((state) => state.diagnostics);
+  const recoveryItems = useWorkspaceStore((state) => state.recoveryItems);
   const isIndexing = useWorkspaceStore((state) => state.isIndexing);
   const initialize = useWorkspaceStore((state) => state.initialize);
   const resumeWorkspace = useWorkspaceStore((state) => state.resumeWorkspace);
@@ -113,12 +119,15 @@ export function App() {
   const selectPath = useWorkspaceStore((state) => state.selectPath);
   const updateDocument = useWorkspaceStore((state) => state.updateDocument);
   const setViewMode = useWorkspaceStore((state) => state.setViewMode);
+  const requestEditingTakeover = useWorkspaceStore((state) => state.requestEditingTakeover);
   const saveDocument = useWorkspaceStore((state) => state.saveDocument);
   const createDocument = useWorkspaceStore((state) => state.createDocument);
   const createDirectory = useWorkspaceStore((state) => state.createDirectory);
   const moveEntry = useWorkspaceStore((state) => state.moveEntry);
   const trashEntry = useWorkspaceStore((state) => state.trashEntry);
   const restoreLastTrash = useWorkspaceStore((state) => state.restoreLastTrash);
+  const restoreRecoveryItem = useWorkspaceStore((state) => state.restoreRecoveryItem);
+  const removeRecoveryItem = useWorkspaceStore((state) => state.removeRecoveryItem);
   const insertAssets = useWorkspaceStore((state) => state.insertAssets);
   const checkExternalChanges = useWorkspaceStore((state) => state.checkExternalChanges);
   const getHistory = useWorkspaceStore((state) => state.getHistory);
@@ -131,7 +140,7 @@ export function App() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(292);
-  const [dialog, setDialog] = useState<"settings" | "history" | "diagnostics" | "drive" | null>(null);
+  const [dialog, setDialog] = useState<"settings" | "history" | "diagnostics" | "drive" | "recovery" | null>(null);
   const account = useAccountStore((state) => state.me);
   const initializeAccount = useAccountStore((state) => state.initialize);
   const synchronizedUser = useRef<string | null>(null);
@@ -182,19 +191,36 @@ export function App() {
   }, [query]);
 
   useEffect(() => {
-    const refreshOnline = () => setOnline(navigator.onLine);
-    const check = () => void checkExternalChanges();
-    const interval = window.setInterval(check, 12_000);
+    let running = false;
+    let lastLifecycleCheckAt = 0;
+    const check = async (lifecycle = false): Promise<void> => {
+      if (running || !navigator.onLine || document.visibilityState !== "visible") return;
+      if (lifecycle && Date.now() - lastLifecycleCheckAt < 1_000) return;
+      if (lifecycle) lastLifecycleCheckAt = Date.now();
+      running = true;
+      try {
+        await checkExternalChanges();
+      } finally {
+        running = false;
+      }
+    };
+    const refreshOnline = (): void => {
+      setOnline(navigator.onLine);
+      if (navigator.onLine) void check(true);
+    };
+    const handleFocus = (): void => { void check(true); };
+    const handleVisibility = (): void => { if (document.visibilityState === "visible") void check(true); };
+    const interval = window.setInterval(() => { void check(); }, 30_000);
     window.addEventListener("online", refreshOnline);
     window.addEventListener("offline", refreshOnline);
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener("online", refreshOnline);
       window.removeEventListener("offline", refreshOnline);
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [checkExternalChanges]);
 
@@ -322,6 +348,7 @@ export function App() {
           <button type="button" onClick={() => void openWorkspace()}>{translate(locale, "openAnother")}</button>
           <button type="button" onClick={() => setDialog("drive")}>Drive</button>
           <button type="button" onClick={() => setDialog("diagnostics")}>{translate(locale, "diagnostics")} {diagnostics.length ? `(${diagnostics.length})` : ""}</button>
+          <button type="button" onClick={() => setDialog("recovery")}>{translate(locale, "recovery")} {recoveryItems.length ? `(${recoveryItems.length})` : ""}</button>
           <button type="button" onClick={() => setDialog("settings")}>{translate(locale, "settings")}</button>
           <button type="button" onClick={toggleLocale}>{translate(locale, "language")}</button>
         </div>
@@ -359,6 +386,7 @@ export function App() {
             <Tabs tabs={tabs} activePath={activePath} locale={locale} onActivate={handleOpenDocument} onClose={(path) => window.setTimeout(() => closeDocument(path), 320)} />
             {activeDocument ? (
               <div className={styles.modeToggle} role="group" aria-label={`${translate(locale, "editor")} / ${translate(locale, "preview")}`}>
+                {activeDocument.editingState === "read-only" ? <button type="button" onClick={() => void requestEditingTakeover(activeDocument.path)}>{translate(locale, "takeOverEditing")}</button> : null}
                 <button type="button" onClick={() => setDialog("history")}>{translate(locale, "history")}</button>
                 <button type="button" onClick={() => window.print()}>{translate(locale, "print")}</button>
                 <button type="button" className={activeDocument.viewMode === "editor" ? styles.modeActive : ""} onClick={() => setViewMode(activeDocument.path, "editor")}>{translate(locale, "editor")}</button>
@@ -376,12 +404,13 @@ export function App() {
             {activeDocument ? (
               activeDocument.viewMode === "editor" ? (
                 <MarkdownEditor
-                  key={`editor:${settings.spellCheck}`}
+                  key={`editor:${settings.spellCheck}:${activeDocument.editingState}`}
                   sessionId={activeDocument.path}
                   content={activeDocument.content}
                   onChange={(path, content, cursor) => updateDocument(path, content, cursor)}
                   onSave={(path) => void saveDocument(path)}
                   spellCheck={settings.spellCheck}
+                  readOnly={activeDocument.editingState === "read-only"}
                   keybindings={settings.keybindings}
                   initialCursor={activeDocument.cursor}
                 />
@@ -410,6 +439,7 @@ export function App() {
       {dialog === "drive" ? <DriveDialog locale={locale} onOpen={(workspace) => { setDialog(null); void openDriveWorkspace(workspace); }} onClose={() => setDialog(null)} /> : null}
       {dialog === "history" && activeDocument ? <HistoryDialog locale={locale} path={activeDocument.path} load={getHistory} onRestore={(entry) => void restoreHistory(entry)} onClose={() => setDialog(null)} /> : null}
       {dialog === "diagnostics" ? <DiagnosticsDialog locale={locale} diagnostics={diagnostics} onOpen={handleOpenDocument} onClose={() => setDialog(null)} /> : null}
+      {dialog === "recovery" ? <RecoveryDialog locale={locale} items={recoveryItems} onRestore={(id, path) => void restoreRecoveryItem(id, path)} onDelete={(id) => void removeRecoveryItem(id)} onClose={() => setDialog(null)} /> : null}
       {updateAvailable ? <UpdatePrompt locale={locale} onUpdate={() => window.setTimeout(() => void flushDurableDrafts().then(activatePwaUpdate), 320)} /> : null}
       {lastTrash ? <RecoveryToast locale={locale} onRestore={() => void restoreLastTrash()} /> : null}
       {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}

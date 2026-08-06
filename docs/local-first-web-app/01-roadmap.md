@@ -51,7 +51,8 @@ Make the local experience durable, searchable, recoverable, and installable.
 ### Scope
 
 - PWA manifest, service worker, offline app shell, and safe update prompt.
-- IndexedDB/OPFS support for drafts, cache, history, indexes, and session restoration.
+- IndexedDB/OPFS support for drafts, a revisioned workspace manifest and document repository, history, indexes, and session restoration.
+- Provider-independent warm startup from local durable state, followed by non-blocking priority reconciliation.
 - Full-text search over file names and Markdown content.
 - Search results in the sidebar in place of the file tree.
 - Incremental indexing in background workers.
@@ -70,6 +71,7 @@ Make the local experience durable, searchable, recoverable, and installable.
 ### Exit criteria
 
 - The app reopens offline with cached application assets and safely retained work.
+- A cached workspace restores its tree, tabs, active document, and search index without waiting for a provider scan.
 - Supported browsers pass the required local or Drive workflow matrix.
 - Search remains responsive at the target workspace size.
 - Browser data migrations preserve drafts, history, indexes, and session state.
@@ -94,7 +96,7 @@ Add a multi-user-safe API and Google Drive as the first remote workspace provide
 - Open existing and create new Drive workspace folders.
 - Store only Drive folder IDs and display names on the backend.
 - Direct browser-to-Drive content transfer using short-lived access tokens.
-- Local encrypted Drive mirror.
+- Local encrypted Drive repository covering content and sensitive derived metadata.
 - Global preference and keybinding synchronization.
 - Account deletion and provider disconnect flows.
 
@@ -117,11 +119,12 @@ Complete the local-first Drive experience and harden the entire product for publ
 - Mirror all Markdown plus referenced images; support optional offline pinning for other images.
 - Debounced autosave and automatic foreground synchronization.
 - Resume synchronization when the open app regains connectivity.
-- Drive revision checks and incremental change discovery.
+- Metadata-first Drive revision checks, priority reconciliation, and incremental change discovery through the Drive Changes API.
+- Zero content downloads for unchanged Markdown on a warm start and no routine recursive Drive scan after change-token initialization.
 - Three-way merge based on the last synchronized base.
 - Responsive visual conflict editor.
 - Foreground sync queue, progress, retry, and conflict status.
-- Encrypted/locked Drive mirrors after explicit logout.
+- Encrypted/locked Drive repositories after explicit logout.
 - WCAG 2.2 AA completion.
 - Performance, memory, and large-workspace hardening.
 - OpenTelemetry integration and privacy-safe analytics layers.
@@ -132,6 +135,7 @@ Complete the local-first Drive experience and harden the entire product for publ
 
 - All v1 feature specifications and release gates pass.
 - Drive conflicts cannot cause silent data loss.
+- On defined lower-end mobile benchmark hardware, a cached 10,000-entry workspace is interactive within one second while remote reconciliation continues in the background.
 - A documented Docker Compose installation can be installed and upgraded without content loss.
 - Operational dashboards reveal traffic, errors, latency, database pressure, and Drive quota pressure.
 - Public release documentation accurately states capabilities and browser limits.
