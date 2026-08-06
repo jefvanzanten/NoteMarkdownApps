@@ -15,6 +15,7 @@ import { HistoryDialog } from "./components/HistoryDialog";
 import { DiagnosticsDialog } from "./components/DiagnosticsDialog";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 import { DriveDialog } from "./components/DriveDialog";
+import { WorkspaceLoadingOverlay } from "./components/WorkspaceLoadingOverlay";
 import { useAccountStore } from "./account/accountStore";
 import { loadPreferences, putPreferences } from "./account/apiClient";
 import { searchDocuments, type SearchResult } from "./search/searchClient";
@@ -300,6 +301,7 @@ export function App() {
         <button type="button" className={styles.languageWelcome} onClick={toggleLocale}>{translate(locale, "language")}</button>
         <Welcome locale={locale} isOpening={isOpening} isSupported={isSupported} isBrave={isBrave} onOpen={() => void openWorkspace()} onDrive={() => setDialog("drive")} />
         {dialog === "drive" ? <DriveDialog locale={locale} onOpen={(workspace) => { setDialog(null); void openDriveWorkspace(workspace); }} onClose={() => setDialog(null)} /> : null}
+        {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
         {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}
       </>
     );
@@ -408,6 +410,7 @@ export function App() {
       {dialog === "diagnostics" ? <DiagnosticsDialog locale={locale} diagnostics={diagnostics} onOpen={handleOpenDocument} onClose={() => setDialog(null)} /> : null}
       {updateAvailable ? <UpdatePrompt locale={locale} onUpdate={() => window.setTimeout(() => void flushDurableDrafts().then(activatePwaUpdate), 320)} /> : null}
       {lastTrash ? <RecoveryToast locale={locale} onRestore={() => void restoreLastTrash()} /> : null}
+      {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
       {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}
     </div>
   );

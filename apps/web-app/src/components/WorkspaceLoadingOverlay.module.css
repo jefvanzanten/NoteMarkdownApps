@@ -1,0 +1,83 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: color-mix(in srgb, var(--color-canvas) 84%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.panel {
+  width: min(100%, 430px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1.35rem;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-strong);
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.mark {
+  display: grid;
+  width: 2.4rem;
+  height: 2.4rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.6rem;
+  color: var(--color-button-text);
+  background: var(--color-accent-strong);
+  font-weight: 800;
+}
+
+.heading strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.heading p {
+  margin: 0.3rem 0 0;
+  color: var(--color-text-muted);
+  font: 0.75rem/1.45 var(--font-ui);
+}
+
+.progressTrack {
+  height: 0.38rem;
+  margin-top: 1.25rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border-subtle);
+}
+
+.progressBar {
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent-strong);
+  animation: scan 1.15s ease-in-out infinite;
+}
+
+.waitMessage {
+  display: block;
+  margin-top: 0.65rem;
+  color: var(--color-text-dim);
+  font: 0.64rem var(--font-code);
+}
+
+@keyframes scan {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(240%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressBar {
+    width: 100%;
+    animation: none;
+  }
+}
