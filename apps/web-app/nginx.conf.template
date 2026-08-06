@@ -20,7 +20,7 @@ server {
         rewrite ^/notes(/api/.*)$ $1 break;
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
+        proxy_set_header Host $proxy_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Host $host;
@@ -29,7 +29,7 @@ server {
 
     location = /notes/openapi.json {
         proxy_pass ${API_UPSTREAM}/openapi.json;
-        proxy_set_header Host $http_host;
+        proxy_set_header Host $proxy_host;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
