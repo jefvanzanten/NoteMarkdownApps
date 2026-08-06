@@ -4,10 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "pnpm --filter @note/editor test && pnpm --filter @note/workspace-core test && pnpm --filter @note/workspace-local test && pnpm --filter @note/workspace-drive test && pnpm --filter @note/api-contracts test && pnpm --filter @note/api test && pnpm --filter @note/markdown-wasm test && pnpm --filter @note/web-app test",
     "dev:tray": "pnpm --filter @note/web-tray-app dev",
     "dev:demo": "pnpm --filter demo dev",
+    "dev:web": "pnpm --filter @note/web-app dev --host",
+    "dev:api": "pnpm --filter @note/api dev",
     "build:tray-next": "pnpm --filter @note/web-tray-app build:next",
+    "build:web": "pnpm --filter @note/web-app build",
     "pack:tray": "pnpm --filter @note/web-tray-app electron:pack",
     "pack:desktop": "pnpm build:tray-next && pnpm --filter @note/desktop-app electron:pack",
     "typecheck": "pnpm -r typecheck"

@@ -12,6 +12,7 @@ coverage/
 .turbo/
 .cache/
 dist-electron/
+target/
 
 # TypeScript
 *.tsbuildinfo
