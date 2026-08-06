@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { EditorState, Transaction } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine, keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, LanguageDescription } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { javascript } from "@codemirror/lang-javascript";
@@ -57,6 +58,7 @@ function buildExtensions(
     edgeWhitespaceSelection,
     editorTheme,
     createCommandKeymap(keybindings, { requestSave }),
+    keymap.of(defaultKeymap),
     EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false" }),
     drawSelection(),
     highlightActiveLine(),
