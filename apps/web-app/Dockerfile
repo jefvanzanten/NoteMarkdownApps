@@ -8,8 +8,10 @@ FROM base AS development-dependencies
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/web-app/package.json apps/web-app/package.json
 COPY packages/api-contracts/package.json packages/api-contracts/package.json
+COPY packages/browser-storage/package.json packages/browser-storage/package.json
 COPY packages/editor/package.json packages/editor/package.json
 COPY packages/markdown-wasm/package.json packages/markdown-wasm/package.json
+COPY packages/sync-core/package.json packages/sync-core/package.json
 COPY packages/workspace-core/package.json packages/workspace-core/package.json
 COPY packages/workspace-drive/package.json packages/workspace-drive/package.json
 COPY packages/workspace-local/package.json packages/workspace-local/package.json

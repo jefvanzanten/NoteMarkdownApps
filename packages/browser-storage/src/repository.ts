@@ -936,7 +936,7 @@ export async function importLegacyDriveMirror(
       lastAccessedAt: Date.now(),
     });
     const verification = await loadCachedDocument(workspaceId, entryId);
-    if (verification?.cachedContentRevision.id !== observedRevision.id || verification.content !== document.content) return false;
+    if (!verification || verification.cachedContentRevision.id !== observedRevision.id || verification.content !== document.content) return false;
     const cleanupDatabase = await openDatabase();
     try {
       const transaction = cleanupDatabase.transaction("driveMirror", "readwrite");
