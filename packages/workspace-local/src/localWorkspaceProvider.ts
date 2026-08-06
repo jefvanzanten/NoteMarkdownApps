@@ -127,11 +127,12 @@ export async function openLocalWorkspace(): Promise<LocalWorkspaceProvider> {
  * Reopens a previously persisted directory handle without showing a picker.
  * @param handle Persisted File System Access directory handle.
  * @param id Stable browser-local workspace identity.
- * @returns A local provider when permission is still granted.
+ * @param prompt Whether the browser may prompt the user for renewed permission.
+ * @returns A local provider when permission is granted.
  */
-export async function reopenLocalWorkspace(handle: FileSystemDirectoryHandle, id: string): Promise<LocalWorkspaceProvider> {
+export async function reopenLocalWorkspace(handle: FileSystemDirectoryHandle, id: string, prompt = false): Promise<LocalWorkspaceProvider> {
   const provider = new LocalWorkspaceProvider(handle, id);
-  if (!await provider.requestPermission(false)) {
+  if (!await provider.requestPermission(prompt)) {
     throw new WorkspaceError("permission", "The workspace needs permission before it can be reopened.");
   }
   return provider;

@@ -99,11 +99,13 @@ export function App() {
   const activePath = useWorkspaceStore((state) => state.activePath);
   const selectedPath = useWorkspaceStore((state) => state.selectedPath);
   const isOpening = useWorkspaceStore((state) => state.isOpening);
+  const resumableWorkspace = useWorkspaceStore((state) => state.resumableWorkspace);
   const error = useWorkspaceStore((state) => state.error);
   const lastTrash = useWorkspaceStore((state) => state.lastTrash);
   const diagnostics = useWorkspaceStore((state) => state.diagnostics);
   const isIndexing = useWorkspaceStore((state) => state.isIndexing);
   const initialize = useWorkspaceStore((state) => state.initialize);
+  const resumeWorkspace = useWorkspaceStore((state) => state.resumeWorkspace);
   const openWorkspace = useWorkspaceStore((state) => state.openWorkspace);
   const openDriveWorkspace = useWorkspaceStore((state) => state.openDriveWorkspace);
   const openDocument = useWorkspaceStore((state) => state.openDocument);
@@ -299,7 +301,7 @@ export function App() {
     return (
       <>
         <button type="button" className={styles.languageWelcome} onClick={toggleLocale}>{translate(locale, "language")}</button>
-        <Welcome locale={locale} isOpening={isOpening} isSupported={isSupported} isBrave={isBrave} onOpen={() => void openWorkspace()} onDrive={() => setDialog("drive")} />
+        <Welcome locale={locale} isOpening={isOpening} isSupported={isSupported} isBrave={isBrave} resumableWorkspaceName={resumableWorkspace?.name ?? null} onResume={() => void resumeWorkspace()} onOpen={() => void openWorkspace()} onDrive={() => setDialog("drive")} />
         {dialog === "drive" ? <DriveDialog locale={locale} onOpen={(workspace) => { setDialog(null); void openDriveWorkspace(workspace); }} onClose={() => setDialog(null)} /> : null}
         {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
         {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}

@@ -7,16 +7,18 @@ interface WelcomeProps {
   isOpening: boolean;
   isSupported: boolean;
   isBrave: boolean;
+  resumableWorkspaceName: string | null;
+  onResume: () => void;
   onOpen: () => void;
   onDrive: () => void;
 }
 
 /**
- * Presents the account-free real-directory entry journey.
- * @param props Locale, capability state, progress, and picker callback.
+ * Presents the account-free real-directory entry and session-resume journey.
+ * @param props Locale, capability state, resumable workspace, and open callbacks.
  * @returns The local workspace welcome screen.
  */
-export function Welcome({ locale, isOpening, isSupported, isBrave, onOpen, onDrive }: WelcomeProps) {
+export function Welcome({ locale, isOpening, isSupported, isBrave, resumableWorkspaceName, onResume, onOpen, onDrive }: WelcomeProps) {
   return (
     <main className={styles.welcome}>
       <div className={styles.ambient} aria-hidden="true" />
@@ -25,6 +27,18 @@ export function Welcome({ locale, isOpening, isSupported, isBrave, onOpen, onDri
         <p className={styles.eyebrow}>NoteMarkdown / local-first</p>
         <h1>{translate(locale, "unsupportedTitle")}</h1>
         <p className={styles.lead}>{translate(locale, "unsupportedBody")}</p>
+        {resumableWorkspaceName ? (
+          <div className={styles.resumeCard}>
+            <div>
+              <span>{translate(locale, "previousWorkspace")}</span>
+              <strong>{resumableWorkspaceName}</strong>
+              <p>{translate(locale, "resumePermission")}</p>
+            </div>
+            <button type="button" onClick={onResume} disabled={isOpening}>
+              {translate(locale, "continueWorkspace")}
+            </button>
+          </div>
+        ) : null}
         <button type="button" className={styles.openButton} onClick={onOpen} disabled={!isSupported || isOpening}>
           <span aria-hidden="true">↗</span>
           {translate(locale, "openDirectory")}

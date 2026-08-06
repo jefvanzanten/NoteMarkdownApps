@@ -26,6 +26,7 @@ import {
   saveSession,
   saveWorkspace,
   type HistoryEntry,
+  type StoredWorkspace,
 } from "../storage/browserStorage";
 import { indexSearchDocument, removeSearchDocument, replaceSearchDocuments } from "../search/searchClient";
 
@@ -56,10 +57,12 @@ interface WorkspaceState {
   selectedPath: string | null;
   isOpening: boolean;
   isIndexing: boolean;
+  resumableWorkspace: StoredWorkspace | null;
   error: string | null;
   lastTrash: TrashResult | null;
   diagnostics: WorkspaceDiagnostic[];
   initialize: () => Promise<void>;
+  resumeWorkspace: () => Promise<void>;
   openWorkspace: () => Promise<void>;
   openDriveWorkspace: (reference: DriveWorkspaceReference) => Promise<void>;
   refreshEntries: () => Promise<void>;
@@ -294,7 +297,7 @@ async function activateProvider(
     }
   }
   const activePath = tabs.some((tab) => tab.path === session?.activePath) ? session?.activePath ?? null : tabs.at(-1)?.path ?? null;
-  set({ provider, entries, tabs, activePath, selectedPath: session?.selectedPath ?? activePath, isOpening: false, isIndexing: true, error: null, lastTrash: null });
+  set({ provider, entries, tabs, activePath, selectedPath: session?.selectedPath ?? activePath, isOpening: false, isIndexing: true, resumableWorkspace: null, error: null, lastTrash: null });
   void indexWorkspace(provider, entries, (_documents, diagnostics) => {
     if (get().provider?.id === provider.id) set({ diagnostics, isIndexing: false });
   });
@@ -352,6 +355,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   selectedPath: null,
   isOpening: false,
   isIndexing: false,
+  resumableWorkspace: null,
   error: null,
   lastTrash: null,
   diagnostics: [],
@@ -365,10 +369,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         set({ isOpening: false });
         return;
       }
+      set({ resumableWorkspace: stored });
       await activateProvider(await reopenLocalWorkspace(stored.handle, stored.id), set, get);
     } catch (error) {
       const permissionError = error instanceof WorkspaceError && error.code === "permission";
       set({ isOpening: false, error: permissionError ? null : errorMessage(error) });
+    }
+  },
+
+  /**
+   * Requests renewed browser permission and restores the retained workspace session.
+   * @returns Nothing after restoration completes or permission is rejected.
+   */
+  resumeWorkspace: async () => {
+    const stored = get().resumableWorkspace;
+    if (!stored) return;
+    set({ isOpening: true, error: null });
+    try {
+      await activateProvider(await reopenLocalWorkspace(stored.handle, stored.id, true), set, get);
+    } catch (error) {
+      set({ isOpening: false, error: errorMessage(error) });
     }
   },
 

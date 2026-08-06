@@ -35,6 +35,13 @@
 .eyebrow { margin: 0 0 1rem; color: var(--color-accent-strong); font: 650 0.72rem var(--font-code); letter-spacing: 0.12em; text-transform: uppercase; }
 .card h1 { max-width: 620px; margin: 0; color: var(--color-text); font: 720 clamp(2.8rem, 8vw, 5.8rem)/0.96 var(--font-ui); letter-spacing: -0.065em; }
 .lead { max-width: 560px; margin: 1.75rem 0 2rem; color: var(--color-text-muted); font: 400 clamp(1rem, 2vw, 1.2rem)/1.65 var(--font-reading); }
+.resumeCard { display: flex; max-width: 560px; align-items: center; justify-content: space-between; gap: 1rem; margin: -0.65rem 0 1.35rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.9rem 1rem; background: var(--color-surface-raised); box-shadow: var(--shadow-soft); }
+.resumeCard div { min-width: 0; }
+.resumeCard span { display: block; color: var(--color-text-dim); font: 0.61rem var(--font-code); letter-spacing: 0.08em; text-transform: uppercase; }
+.resumeCard strong { display: block; overflow: hidden; margin-top: 0.25rem; color: var(--color-text); font-size: 0.88rem; text-overflow: ellipsis; white-space: nowrap; }
+.resumeCard p { margin: 0.25rem 0 0; color: var(--color-text-muted); font-size: 0.72rem; }
+.resumeCard button { min-height: 2.45rem; flex: 0 0 auto; border: 0; border-radius: var(--radius-sm); padding: 0 0.9rem; color: var(--color-button-text); background: var(--color-accent-strong); font: 680 0.75rem var(--font-ui); cursor: pointer; }
+.resumeCard button:disabled { cursor: not-allowed; opacity: 0.45; }
 .openButton { display: inline-flex; min-height: 3.25rem; align-items: center; gap: 0.8rem; border: 0; border-radius: var(--radius-md); padding: 0 1.35rem; color: var(--color-button-text); background: var(--color-accent-strong); font: 680 0.88rem var(--font-ui); cursor: pointer; box-shadow: var(--shadow-soft); }
 .openButton:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
 .openButton:disabled { cursor: not-allowed; opacity: 0.45; }
@@ -42,3 +49,9 @@
 .unsupported { max-width: 560px; color: var(--color-danger); font: 0.82rem/1.5 var(--font-ui); }
 .privacy { display: flex; align-items: center; gap: 0.55rem; margin-top: 2rem; color: var(--color-text-dim); font: 0.72rem var(--font-code); }
 .privacy span { color: var(--color-success); font-size: 0.5rem; }
+
+@media (max-width: 560px) {
+  .resumeCard { align-items: stretch; flex-direction: column; }
+  .resumeCard button { width: 100%; }
+  .driveButton { margin: 0.65rem 0 0; }
+}

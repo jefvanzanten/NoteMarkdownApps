@@ -4,6 +4,9 @@ const messages = {
   en: {
     openDirectory: "Open local directory",
     openAnother: "Open another directory",
+    previousWorkspace: "Previous workspace",
+    continueWorkspace: "Continue",
+    resumePermission: "Give this browser permission to restore your previous session.",
     unsupportedTitle: "Your files stay yours.",
     unsupportedBody: "Choose a real directory to edit ordinary Markdown files. Local directory access works best in Chromium browsers.",
     privacy: "No account. No uploads. Files are saved directly to your directory.",
@@ -86,6 +89,9 @@ const messages = {
   nl: {
     openDirectory: "Lokale map openen",
     openAnother: "Andere map openen",
+    previousWorkspace: "Vorige werkruimte",
+    continueWorkspace: "Verdergaan",
+    resumePermission: "Geef deze browser toestemming om je vorige sessie te herstellen.",
     unsupportedTitle: "Jouw bestanden blijven van jou.",
     unsupportedBody: "Kies een echte map om gewone Markdown-bestanden te bewerken. Lokale maptoegang werkt het best in Chromium-browsers.",
     privacy: "Geen account. Geen uploads. Bestanden worden rechtstreeks in je map opgeslagen.",
