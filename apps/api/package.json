@@ -1,0 +1,32 @@
+{
+  "name": "@note/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @note/api-contracts build && tsx watch src/index.ts",
+    "build": "pnpm --filter @note/api-contracts build && tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "test": "pnpm --filter @note/api-contracts build && vitest run",
+    "test:integration": "RUN_DATABASE_TESTS=true vitest run src/repository.integration.test.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:up": "docker compose -f compose.yaml up -d --wait",
+    "db:down": "docker compose -f compose.yaml down",
+    "db:reset": "docker compose -f compose.yaml down -v",
+    "db:migrate": "tsx src/migrate.ts",
+    "setup:local": "pnpm db:up && pnpm db:migrate",
+    "openapi": "tsx src/writeOpenApi.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.5",
+    "@hono/zod-openapi": "^1.2.2",
+    "@note/api-contracts": "workspace:*",
+    "drizzle-orm": "^0.44.7",
+    "dotenv": "^16.6.1",
+    "hono": "^4.10.6",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": { "@types/node": "^22.10.0", "@types/pg": "^8.15.5", "drizzle-kit": "^0.31.7", "tsx": "^4.20.6", "typescript": "^5.6.0", "vitest": "^3.2.4" }
+}
