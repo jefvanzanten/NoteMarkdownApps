@@ -256,7 +256,7 @@ Drive cache/change tests additionally assert:
 - a changes cursor advances only atomically with applied pages;
 - invalid/expired tokens and ambiguous ancestry trigger a scoped full scan;
 - trashed/permanently removed entries, moves, and duplicate names map to explicit domain states;
-- the protected staging smoke suite uses a synthetic selected folder and validates the actual `drive.file`/Picker behavior.
+- the protected staging smoke suite uses a synthetic selected folder and validates the actual full `drive` scope/Picker behavior.
 
 ## 8. Browser and device matrix
 

@@ -382,6 +382,9 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
         fields: `nextPageToken,files(${DRIVE_FIELDS})`,
         pageSize: "1000",
         orderBy: "folder,name",
+        spaces: "drive",
+        includeItemsFromAllDrives: "true",
+        supportsAllDrives: "true",
         ...(pageToken ? { pageToken } : {}),
       });
       const response = await this.request(`https://www.googleapis.com/drive/v3/files?${params}`, {}, "list");
