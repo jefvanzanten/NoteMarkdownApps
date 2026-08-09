@@ -110,6 +110,11 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
   app.get("/health", (context) => context.json({ status: "ok" }));
   app.get("/ready", async (context) => { try { await repository.checkReady(); return context.json({ status: "ready" }); } catch { return context.json({ status: "unavailable" }, 503); } });
   app.get("/openapi.json", (context) => context.json(app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "NoteMarkdown metadata API", version: "1.0.0", description: "Authentication, preferences, and Drive folder references. Document content is forbidden." } })));
-  app.onError((error, context) => { console.error("API request failed", { name: error.name }); return context.json({ error: { code: "internal", message: "The request could not be completed." } }, 500); });
+  app.onError((error, context) => {
+    const requestId = crypto.randomUUID();
+    console.error("API request failed", { requestId, method: context.req.method, name: error.name, message: error.message });
+    context.header("x-request-id", requestId);
+    return context.json({ error: { code: "internal", message: `The API request failed internally. Diagnostic reference: ${requestId}.` } }, 500);
+  });
   return app;
 }

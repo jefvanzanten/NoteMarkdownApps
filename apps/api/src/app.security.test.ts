@@ -32,4 +32,19 @@ describe("API security boundaries", () => {
     expect(response.status).toBe(200);
     expect(listDriveWorkspaces).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
   });
+
+  it("correlates an internal response with a reason-bearing server log without exposing the reason", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const app = testApp({ listDriveWorkspaces: async () => { throw new Error("database diagnostic detail"); } } as Partial<ApiRepository>);
+    const response = await app.request("/api/v1/drive/workspaces", { headers: { cookie: "nm_session=valid" } });
+    const body = await response.json() as { error: { code: string; message: string } };
+    const requestId = response.headers.get("x-request-id");
+
+    expect(response.status).toBe(500);
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.error).toEqual({ code: "internal", message: `The API request failed internally. Diagnostic reference: ${requestId}.` });
+    expect(body.error.message).not.toContain("database diagnostic detail");
+    expect(consoleError).toHaveBeenCalledWith("API request failed", expect.objectContaining({ requestId, message: "database diagnostic detail" }));
+    consoleError.mockRestore();
+  });
 });
