@@ -78,7 +78,8 @@
 .statusbar span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusbar span:last-child::before { content: "●"; margin-right: 0.4rem; color: var(--color-success); font-size: 0.45rem; }
 .statusbar span[data-state="dirty-local"]::before,
-.statusbar span[data-state="persisting-local"]::before { color: var(--color-warning); }
+.statusbar span[data-state="persisting-local"]::before,
+.statusbar span[data-state="queued"]::before { color: var(--color-warning); }
 .statusbar span[data-state="conflicted"]::before,
 .statusbar span[data-state="error-blocking"]::before { color: var(--color-danger); }
 .scrim { display: none; }

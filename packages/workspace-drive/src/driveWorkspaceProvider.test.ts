@@ -117,6 +117,48 @@ describe("DriveWorkspaceProvider privacy boundary", () => {
     await expect(provider.listChanges("expired")).rejects.toMatchObject({ code: "cursor-invalid" });
   });
 
+  it("invalidates and refreshes a cached token once after Google returns 401", async () => {
+    const tokens = ["expired-token", "fresh-token"];
+    const invalidateAccessToken = vi.fn();
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string> | undefined)?.authorization;
+      return authorization === "Bearer expired-token"
+        ? new Response(null, { status: 401 })
+        : new Response(JSON.stringify({ files: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new DriveWorkspaceProvider({
+      workspaceId: "workspace-1",
+      folderId: "folder-1",
+      displayName: "Notes",
+      tokenProvider: { getAccessToken: async () => tokens.shift() ?? "fresh-token", invalidateAccessToken },
+    });
+    await expect(provider.listEntries()).resolves.toEqual([]);
+    expect(invalidateAccessToken).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps browser fetch failures to a retryable provider error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+    const provider = new DriveWorkspaceProvider({ workspaceId: "workspace-1", folderId: "folder-1", displayName: "Notes", tokenProvider: { getAccessToken: async () => "short-token" } });
+    await expect(provider.listEntries()).rejects.toMatchObject({ code: "temporary" });
+  });
+
+  it("reports path-free request outcomes to diagnostics", async () => {
+    const results: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 503 })));
+    const provider = new DriveWorkspaceProvider({
+      workspaceId: "workspace-1",
+      folderId: "folder-1",
+      displayName: "Notes",
+      tokenProvider: { getAccessToken: async () => "short-token" },
+      diagnostics: { recordRequest: () => undefined, recordContentDownload: () => undefined, recordRequestResult: (result) => results.push(result) },
+    });
+    await expect(provider.listEntries()).rejects.toMatchObject({ code: "temporary" });
+    expect(results).toMatchObject([{ kind: "list", outcome: "failed", status: 503, errorCode: "temporary" }]);
+    expect(JSON.stringify(results)).not.toContain("folder-1");
+  });
+
   it("reports duplicate sibling paths instead of overwriting identity maps", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes("/drive/v3/files?")) return new Response(JSON.stringify({ files: [

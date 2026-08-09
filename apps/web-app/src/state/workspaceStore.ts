@@ -14,7 +14,7 @@ import { LocalWorkspaceProvider, openLocalWorkspace, reopenLocalWorkspace } from
 import { DriveWorkspaceProvider } from "@note/workspace-drive";
 import { applyWorkspaceChanges, CancelledWorkError, PriorityScheduler, retryDelay, type ManifestPathMove, type WorkPriority } from "@note/sync-core";
 import type { DriveWorkspaceReference } from "@note/api-contracts";
-import { getDriveAccessToken } from "../account/apiClient";
+import { getDriveAccessToken, invalidateDriveAccessToken } from "../account/apiClient";
 import {
   acknowledgeIndexRevision,
   commitCachedDocument,
@@ -67,7 +67,7 @@ import {
 } from "../storage/browserStorage";
 import { indexSearchDocument, removeSearchDocument, replaceSearchDocuments } from "../search/searchClient";
 import { acquireDocumentEditingLease, acquireWorkspaceLeadership, takeOverDocumentEditingLease, type EditingLeaseHandle, type LeadershipHandle } from "../sync/browserCoordination";
-import { createDriveDiagnostics, recordWorkspaceMetric } from "../sync/workspaceDiagnostics";
+import { createDriveDiagnostics, recordSyncDiagnostic, recordWorkspaceMetric, type SyncDiagnosticEvent } from "../sync/workspaceDiagnostics";
 
 export type DocumentViewMode = "editor" | "preview";
 export type DocumentSaveState = "checking" | "clean" | "dirty-local" | "persisting-local" | "queued" | "conflicted" | "destroyed" | "error-blocking";
@@ -194,6 +194,29 @@ function replacePathPrefix(path: string, sourcePath: string, destinationPath: st
  */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The workspace operation failed.";
+}
+
+/**
+ * Reduces an unknown write failure to a path-free diagnostic category.
+ * @param error Unknown provider or coordination failure.
+ * @returns Stable local diagnostic category.
+ */
+function diagnosticErrorCode(error: unknown): SyncDiagnosticEvent["errorCode"] {
+  if (error instanceof WorkspaceError) return error.code;
+  if (error instanceof CancelledWorkError) return "cancelled";
+  return "unexpected";
+}
+
+/**
+ * Calculates a bounded provider-write retry delay for transient failures.
+ * @param error Provider or leadership failure.
+ * @param attempt Number of previous failed attempts.
+ * @returns Retry delay, or null for blocking and exhausted failures.
+ */
+function providerWriteRetryDelay(error: unknown, attempt: number): number | null {
+  if (error instanceof CancelledWorkError) return retryDelay(attempt);
+  if (!(error instanceof WorkspaceError) || (error.code !== "offline" && error.code !== "quota" && error.code !== "permission" && error.code !== "temporary")) return null;
+  return retryDelay(attempt, { retryAfterMs: error.retryAfterMs });
 }
 
 /**
@@ -575,11 +598,20 @@ async function reconcileOpenDocument(
  * Applies one durable pending write after fresh provider revision verification.
  * @param provider Active sync-leader provider.
  * @param pending Durable outbox item.
- * @returns Nothing after acknowledgement or durable retry/conflict state.
+ * @returns Applied content facts, or null after a durable retry/conflict state.
  */
-async function processPendingWrite(provider: WorkspaceProvider, pending: PendingDocumentWrite): Promise<void> {
+async function processPendingWrite(
+  provider: WorkspaceProvider,
+  pending: PendingDocumentWrite,
+): Promise<{ entryId: string; saveState: DocumentSaveState; content?: string; revision?: WorkspaceRevision }> {
   const draft = await loadRepositoryDraft(provider.id, pending.entryId);
-  if (!draft) return;
+  if (!draft) {
+    await updatePendingWrite({ ...pending, state: "blocked", attempt: pending.attempt + 1, retryAt: undefined });
+    recordSyncDiagnostic({ operation: "provider-write", outcome: "failed", attempt: pending.attempt + 1, errorCode: "missing-draft" });
+    return { entryId: pending.entryId, saveState: "error-blocking" };
+  }
+  const startedAt = Date.now();
+  recordSyncDiagnostic({ operation: "provider-write", outcome: "started", attempt: pending.attempt + 1 });
   try {
     if (provider.getEntryMetadata) {
       const metadata = await provider.getEntryMetadata({ entryId: pending.entryId, path: pending.targetPath });
@@ -600,15 +632,28 @@ async function processPendingWrite(provider: WorkspaceProvider, pending: Pending
       format: draft.format,
       revision,
     }), pending);
-    await deleteRepositoryDraft(provider.id, pending.entryId);
+    const latestDraft = await loadRepositoryDraft(provider.id, pending.entryId);
+    if (latestDraft?.updatedAt === draft.updatedAt) await deleteRepositoryDraft(provider.id, pending.entryId);
+    recordSyncDiagnostic({ operation: "provider-write", outcome: "succeeded", attempt: pending.attempt + 1, durationMs: Date.now() - startedAt });
+    return { entryId: pending.entryId, saveState: "clean", content: draft.content, revision };
   } catch (error) {
     const conflicted = error instanceof WorkspaceError && (error.code === "conflict" || error.code === "not-found");
+    const retryDelayMs = conflicted ? null : providerWriteRetryDelay(error, pending.attempt);
     await updatePendingWrite({
       ...pending,
-      state: conflicted ? "conflicted" : "retryable",
+      state: conflicted ? "conflicted" : retryDelayMs === null ? "blocked" : "retryable",
       attempt: pending.attempt + 1,
-      retryAt: conflicted ? undefined : Date.now() + 5_000,
+      retryAt: retryDelayMs === null ? undefined : Date.now() + retryDelayMs,
     });
+    recordSyncDiagnostic({
+      operation: "provider-write",
+      outcome: "failed",
+      attempt: pending.attempt + 1,
+      durationMs: Date.now() - startedAt,
+      errorCode: diagnosticErrorCode(error),
+      retryDelayMs: retryDelayMs ?? undefined,
+    });
+    return { entryId: pending.entryId, saveState: conflicted ? "conflicted" : retryDelayMs === null ? "error-blocking" : "queued" };
   }
 }
 
@@ -855,7 +900,14 @@ async function reconcileProvider(
       priority: 3,
       run: async (token) => {
         token.throwIfCancelled();
-        await processPendingWrite(provider, pending);
+        const result = await processPendingWrite(provider, pending);
+        set((current) => ({
+          tabs: current.tabs.map((tab) => {
+            if (tab.entryId !== result.entryId) return tab;
+            if (result.saveState === "clean" && result.revision && tab.content === result.content) return { ...tab, revision: result.revision, saveState: "clean" };
+            return result.saveState === "clean" ? tab : { ...tab, saveState: result.saveState };
+          }),
+        }));
       },
     });
   }
@@ -1080,8 +1132,18 @@ async function activateProvider(
     void Promise.all([loadWorkspaceManifest(provider.id), loadCachedDocuments(provider.id)]).then(([nextManifest, documents]) => {
       if (!nextManifest || get().provider?.id !== provider.id) return;
       const nextEntries = manifestToWorkspaceEntries(nextManifest.entries);
+      const documentsByEntryId = new Map(documents.map((document) => [document.entryId, document]));
       replaceSearchDocuments(documents.map(({ path, content }) => ({ path, content })));
-      set({ entries: nextEntries, diagnostics: calculateDiagnostics(documents, nextEntries), isIndexing: false });
+      set((current) => ({
+        entries: nextEntries,
+        tabs: current.tabs.map((tab) => {
+          const cached = documentsByEntryId.get(tab.entryId);
+          if (!cached || cached.content !== tab.content || (tab.saveState !== "queued" && tab.saveState !== "persisting-local" && tab.saveState !== "error-blocking")) return tab;
+          return { ...tab, revision: cached.cachedContentRevision, metadataFingerprint: cached.metadataFingerprint, saveState: "clean" };
+        }),
+        diagnostics: calculateDiagnostics(documents, nextEntries),
+        isIndexing: false,
+      }));
     });
   }, () => {
     if (leadership?.isLeader && get().provider?.id === provider.id) {
@@ -1164,7 +1226,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           workspaceId: repositoryWorkspace.providerWorkspaceId,
           folderId: repositoryWorkspace.folderId,
           displayName: repositoryWorkspace.name,
-          tokenProvider: { getAccessToken: () => getDriveAccessToken(repositoryWorkspace.connectedAccountId!) },
+          tokenProvider: {
+            getAccessToken: () => getDriveAccessToken(repositoryWorkspace.connectedAccountId!),
+            invalidateAccessToken: () => invalidateDriveAccessToken(repositoryWorkspace.connectedAccountId!),
+          },
           diagnostics: createDriveDiagnostics(),
         });
         await activateProvider(provider, set, get, { ...repositoryWorkspace, lastOpenedAt: Date.now() });
@@ -1226,7 +1291,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         workspaceId: reference.id,
         folderId: reference.folderId,
         displayName: reference.displayName,
-        tokenProvider: { getAccessToken: () => getDriveAccessToken(reference.connectedAccountId) },
+        tokenProvider: {
+          getAccessToken: () => getDriveAccessToken(reference.connectedAccountId),
+          invalidateAccessToken: () => invalidateDriveAccessToken(reference.connectedAccountId),
+        },
         diagnostics: createDriveDiagnostics(),
       });
       await activateProvider(provider, set, get, {
@@ -1402,14 +1470,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       attempt: 0,
     };
     try {
+      const existingPending = (await loadPendingWrites(provider.id)).find((item) => item.id === pendingWrite.id);
+      if (existingPending?.state === "retryable") pendingWrite.attempt = existingPending.attempt;
       await persistDocument(provider.id, snapshot);
       await savePendingWrite(pendingWrite);
+      recordSyncDiagnostic({ operation: "provider-write", outcome: "queued", attempt: pendingWrite.attempt });
       if (leadership && !leadership.isLeader) {
         leadership.requestSync();
         set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState: "queued" } : tab) }));
         return;
       }
       await checkpoint(provider.id, snapshot, "provider-save");
+      const writeStartedAt = Date.now();
+      recordSyncDiagnostic({ operation: "provider-write", outcome: "started", attempt: pendingWrite.attempt + 1 });
       set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState: "persisting-local" } : tab) }));
       if (provider.getEntryMetadata) {
         const metadata = await provider.getEntryMetadata({ entryId: snapshot.entryId, path: snapshot.path });
@@ -1422,6 +1495,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const revision = await provider.writeDocument({ path: snapshot.path, content: snapshot.content, format: snapshot.format, expectedRevision: snapshot.revision });
       const cachedDocument = cachedDocumentFromProvider(provider.id, snapshot.entryId, { ...snapshot, revision });
       await commitDocumentAndAcknowledgeWrite(cachedDocument, pendingWrite);
+      recordSyncDiagnostic({ operation: "provider-write", outcome: "succeeded", attempt: pendingWrite.attempt + 1, durationMs: Date.now() - writeStartedAt });
       set((current) => ({
         tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, revision, saveState: tab.content === snapshot.content ? "clean" : "dirty-local" } : tab),
         error: null,
@@ -1432,7 +1506,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
     } catch (error) {
       const conflicted = error instanceof WorkspaceError && (error.code === "conflict" || error.code === "not-found");
-      const retryable = error instanceof WorkspaceError && (error.code === "offline" || error.code === "quota" || error.code === "permission");
+      const retryDelayMs = conflicted ? null : providerWriteRetryDelay(error, pendingWrite.attempt);
       if (error instanceof WorkspaceError && error.code === "conflict") {
         try {
           const remote = await provider.readDocument(snapshot.path);
@@ -1468,8 +1542,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         await saveRecoveryItem(recoveryItem);
         set((current) => ({ recoveryItems: [recoveryItem, ...current.recoveryItems] }));
       }
-      await updatePendingWrite({ ...pendingWrite, state: conflicted ? "conflicted" : "retryable", attempt: pendingWrite.attempt + 1, retryAt: retryable ? Date.now() + 5_000 : undefined });
-      const saveState: DocumentSaveState = conflicted ? "conflicted" : retryable ? "queued" : "error-blocking";
+      await updatePendingWrite({ ...pendingWrite, state: conflicted ? "conflicted" : retryDelayMs === null ? "blocked" : "retryable", attempt: pendingWrite.attempt + 1, retryAt: retryDelayMs === null ? undefined : Date.now() + retryDelayMs });
+      recordSyncDiagnostic({ operation: "provider-write", outcome: "failed", attempt: pendingWrite.attempt + 1, errorCode: diagnosticErrorCode(error), retryDelayMs: retryDelayMs ?? undefined });
+      const saveState: DocumentSaveState = conflicted ? "conflicted" : retryDelayMs === null ? "error-blocking" : "queued";
       set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState } : tab), error: errorMessage(error) }));
     }
   },

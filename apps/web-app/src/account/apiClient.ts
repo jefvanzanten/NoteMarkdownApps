@@ -36,5 +36,7 @@ export async function putPreferences(preferences: PreferenceValue): Promise<void
 const accessTokens = new Map<string, { accessToken: string; expiresAt: number }>();
 /** Obtains a memory-only short-lived Drive token. @param connectedAccountId User-scoped account ID. @returns Access token. */
 export async function getDriveAccessToken(connectedAccountId: string): Promise<string> { const cached = accessTokens.get(connectedAccountId); if (cached && cached.expiresAt > Date.now() + 60_000) return cached.accessToken; const token = await apiRequest<{ accessToken: string; expiresAt: number }>("/api/v1/drive/token", { method: "POST", body: JSON.stringify({ connectedAccountId }) }); accessTokens.set(connectedAccountId, token); return token.accessToken; }
+/** Invalidates one cached Drive credential after Google rejects it. @param connectedAccountId User-scoped account ID. @returns Nothing. */
+export function invalidateDriveAccessToken(connectedAccountId: string): void { accessTokens.delete(connectedAccountId); }
 /** Removes all in-memory provider credentials on explicit logout. @returns Nothing. */
 export function clearAccessTokens(): void { accessTokens.clear(); }

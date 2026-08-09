@@ -13,6 +13,7 @@ import {
   type WorkspaceEntryTarget,
   type WorkspaceMetadataFingerprint,
   type WorkspaceProvider,
+  type WorkspaceErrorCode,
   type WorkspaceRevision,
   type WorkspaceScanBatch,
   type WriteDocumentInput,
@@ -43,13 +44,23 @@ interface DriveChange {
 
 export type DriveRequestKind = "metadata" | "list" | "change" | "content" | "mutation";
 
+export interface DriveRequestResult {
+  kind: DriveRequestKind;
+  outcome: "succeeded" | "failed" | "auth-retry";
+  durationMs: number;
+  status?: number;
+  errorCode?: WorkspaceErrorCode | "unexpected";
+}
+
 export interface DriveDiagnostics {
   recordRequest(kind: DriveRequestKind): void;
+  recordRequestResult?(result: DriveRequestResult): void;
   recordContentDownload(bytes: number): void;
 }
 
 export interface DriveAccessTokenProvider {
   getAccessToken(): Promise<string>;
+  invalidateAccessToken?(): void;
 }
 
 export interface DriveMirror {
@@ -359,12 +370,37 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
    */
   private async request(url: string, init: RequestInit = {}, kind: DriveRequestKind = "metadata"): Promise<Response> {
     if (!navigator.onLine) throw new WorkspaceError("offline", "Google Drive is unavailable while offline.");
+    const startedAt = Date.now();
     this.options.diagnostics?.recordRequest(kind);
-    const response = await fetch(url, {
-      ...init,
-      headers: { authorization: `Bearer ${await this.options.tokenProvider.getAccessToken()}`, ...init.headers },
-    });
-    if (!response.ok) throw driveError(response);
+    let response: Response;
+    try {
+      let accessToken = await this.options.tokenProvider.getAccessToken();
+      response = await fetch(url, {
+        ...init,
+        headers: { authorization: `Bearer ${accessToken}`, ...init.headers },
+      });
+      if (response.status === 401 && this.options.tokenProvider.invalidateAccessToken) {
+        this.options.diagnostics?.recordRequestResult?.({ kind, outcome: "auth-retry", status: 401, durationMs: Date.now() - startedAt, errorCode: "permission" });
+        this.options.tokenProvider.invalidateAccessToken();
+        accessToken = await this.options.tokenProvider.getAccessToken();
+        response = await fetch(url, {
+          ...init,
+          headers: { authorization: `Bearer ${accessToken}`, ...init.headers },
+        });
+      }
+    } catch (error) {
+      const providerError = error instanceof WorkspaceError
+        ? error
+        : new WorkspaceError(navigator.onLine ? "temporary" : "offline", "Google Drive could not be reached.", { cause: error });
+      this.options.diagnostics?.recordRequestResult?.({ kind, outcome: "failed", durationMs: Date.now() - startedAt, errorCode: providerError.code });
+      throw providerError;
+    }
+    if (!response.ok) {
+      const error = driveError(response);
+      this.options.diagnostics?.recordRequestResult?.({ kind, outcome: "failed", status: response.status, durationMs: Date.now() - startedAt, errorCode: error.code });
+      throw error;
+    }
+    this.options.diagnostics?.recordRequestResult?.({ kind, outcome: "succeeded", status: response.status, durationMs: Date.now() - startedAt });
     return response;
   }
 

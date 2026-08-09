@@ -76,7 +76,7 @@ export interface PendingDocumentWrite {
   targetPath: string;
   expectedBaseRevision: WorkspaceRevision;
   draftRevision: string;
-  state: "pending" | "in-flight" | "retryable" | "conflicted" | "applied";
+  state: "pending" | "in-flight" | "retryable" | "conflicted" | "blocked" | "applied";
   attempt: number;
   retryAt?: number;
 }
