@@ -121,7 +121,11 @@ describe("central browser repository", () => {
     expect((await loadWorkspaceSyncState("local:delta"))?.driveChangeToken).toBe("cursor-2");
     expect((await loadCachedDocument("local:delta", "stable"))?.path).toBe("new.md");
     expect((await loadRepositoryDraft("local:delta", "stable"))?.path).toBe("new.md");
-    expect((await loadPendingWrites("local:delta"))[0].targetPath).toBe("new.md");
+    const pendingWrite = (await loadPendingWrites("local:delta"))[0];
+    expect(pendingWrite.targetPath).toBe("new.md");
+    expect(pendingWrite).toMatchObject({ formatVersion: 1 });
+    expect(pendingWrite.createdAt).toEqual(expect.any(Number));
+    expect(pendingWrite.updatedAt).toEqual(expect.any(Number));
     expect((await loadRepositorySession("local:delta"))?.tabs[0].path).toBe("new.md");
   });
 

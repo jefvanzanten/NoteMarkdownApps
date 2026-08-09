@@ -69,6 +69,8 @@ export interface RepositoryHistoryEntry extends RepositoryDraft {
   reason: "autosave" | "provider-save" | "external-change" | "restore";
 }
 
+export const PENDING_WRITE_FORMAT_VERSION = 1;
+
 export interface PendingDocumentWrite {
   id: string;
   workspaceId: string;
@@ -79,6 +81,9 @@ export interface PendingDocumentWrite {
   state: "pending" | "in-flight" | "retryable" | "conflicted" | "blocked" | "applied";
   attempt: number;
   retryAt?: number;
+  formatVersion?: number;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface DocumentConflict {
@@ -643,7 +648,13 @@ export async function loadRepositoryHistory(workspaceId: string, entryId: string
  * @returns Nothing after commit.
  */
 export async function savePendingWrite(pendingWrite: PendingDocumentWrite): Promise<void> {
-  await putProtected("pendingWrites", pendingWrite.workspaceId, pendingWrite.id, pendingWrite);
+  const now = Date.now();
+  await putProtected("pendingWrites", pendingWrite.workspaceId, pendingWrite.id, {
+    ...pendingWrite,
+    formatVersion: pendingWrite.formatVersion ?? PENDING_WRITE_FORMAT_VERSION,
+    createdAt: pendingWrite.createdAt ?? now,
+    updatedAt: now,
+  });
 }
 
 /**
@@ -679,7 +690,7 @@ export async function commitDocumentAndAcknowledgeWrite(
   const documentKey = await opaqueKey(envelope.salt, document.entryId);
   const pendingKey = await opaqueKey(envelope.salt, pendingWrite.id);
   const documentRecord = await protect(envelope, "cachedDocuments", documentKey, document);
-  const appliedRecord = await protect(envelope, "pendingWrites", pendingKey, { ...pendingWrite, state: "applied" });
+  const appliedRecord = await protect(envelope, "pendingWrites", pendingKey, { ...pendingWrite, state: "applied", updatedAt: Date.now() });
   const database = await openDatabase();
   try {
     const transaction = database.transaction(["cachedDocuments", "pendingWrites"], "readwrite");
