@@ -2,6 +2,21 @@ import type { CreateWorkspace, DriveWorkspaceReference, Me, PreferenceValue } fr
 
 interface ApiFailure { error?: { code?: string; message?: string } }
 
+export class ApiRequestError extends Error {
+  /**
+   * Creates a typed metadata-API failure for provider/session classification.
+   * @param message Safe server or fallback failure message.
+   * @param status HTTP response status.
+   * @param code Stable API failure code.
+   * @param requestId Optional server-log correlation identifier.
+   * @returns Typed API request error.
+   */
+  constructor(message: string, readonly status: number, readonly code: string, readonly requestId?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 /** Prefixes an application path with the configured public base path. @param path Root-relative application path. @returns Public path below the deployment base. */
 export function appPath(path: string): string {
   return `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
@@ -10,7 +25,14 @@ export function appPath(path: string): string {
 /** Performs one same-origin metadata API request with stable error handling. @param path Versioned API path. @param init Fetch options. @returns Validated-by-server JSON payload. */
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(appPath(path), { credentials: "include", ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
-  if (!response.ok) { const failure = await response.json().catch(() => ({})) as ApiFailure; throw new Error(failure.error?.message ?? `API request failed (${response.status}).`); }
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({})) as ApiFailure;
+    const code = failure.error?.code ?? "unknown";
+    const requestId = response.headers.get("x-request-id") ?? undefined;
+    const reference = requestId ? ` Reference: ${requestId}.` : "";
+    const message = failure.error?.message ?? `API request failed (${response.status}, ${code}).`;
+    throw new ApiRequestError(`${message}${reference}`, response.status, code, requestId);
+  }
   return response.json() as Promise<T>;
 }
 

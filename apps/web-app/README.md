@@ -61,13 +61,46 @@ Tests and checks:
 ```sh
 pnpm test
 pnpm --filter @note/web-app typecheck
+pnpm test:e2e:drive # protected and skipped unless explicitly enabled
 ```
+
+The real-provider two-browser setup, authentication flow, mutation acknowledgement, rollback behavior, and metric options are documented in [`e2e/README.md`](../../e2e/README.md). Current measured evidence and remaining v1 gaps are recorded in [Google Drive Sync Qualification](../../docs/local-first-web-app/08-drive-sync-qualification.md).
 
 Renderer performance budget:
 
 ```sh
 pnpm --filter @note/markdown-wasm benchmark
 ```
+
+## Local Google Drive setup
+
+The local API and Vite proxy must agree on port `8787`. Configure `apps/api/.env` with at least:
+
+```text
+PUBLIC_ORIGIN=http://localhost:5173
+PORT=8787
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+DATABASE_URL=...
+TOKEN_ENCRYPTION_KEYS=...
+```
+
+Configure the browser-visible Picker values in `apps/web-app/.env`:
+
+```text
+VITE_GOOGLE_PICKER_API_KEY=...
+VITE_GOOGLE_APP_ID=<numeric Google Cloud project number>
+```
+
+The Picker API key is browser-visible and must be restricted by HTTP referrer. Permit the exact local development origin, normally `http://localhost:5173/*`, and the production origin. Enable Google Picker/Drive APIs in the same Cloud project. Add this OAuth redirect URI to the web client:
+
+```text
+http://localhost:5173/api/v1/auth/google/callback
+```
+
+Google sign-in connects an account but does not enumerate the user's Drive. Use **Select existing folder** once per NoteMarkdown deployment/database to link the selected workspace reference. Production workspace references do not automatically appear in a separate local database.
+
+Vite reads Picker environment variables at startup. Reload after an automatic Vite environment restart or restart the user-managed web process after changing `.env` when necessary.
 
 ## Production subpath deployment
 

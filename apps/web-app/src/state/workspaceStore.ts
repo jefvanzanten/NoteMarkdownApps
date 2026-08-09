@@ -11,10 +11,10 @@ import {
   type WorkspaceRevision,
 } from "@note/workspace-core";
 import { LocalWorkspaceProvider, openLocalWorkspace, reopenLocalWorkspace } from "@note/workspace-local";
-import { DriveWorkspaceProvider } from "@note/workspace-drive";
+import { DriveWorkspaceProvider, type DriveAccessTokenProvider } from "@note/workspace-drive";
 import { applyWorkspaceChanges, CancelledWorkError, PriorityScheduler, retryDelay, type ManifestPathMove, type WorkPriority } from "@note/sync-core";
 import type { DriveWorkspaceReference } from "@note/api-contracts";
-import { getDriveAccessToken, invalidateDriveAccessToken } from "../account/apiClient";
+import { ApiRequestError, getDriveAccessToken, invalidateDriveAccessToken } from "../account/apiClient";
 import {
   acknowledgeIndexRevision,
   commitCachedDocument,
@@ -217,6 +217,35 @@ function providerWriteRetryDelay(error: unknown, attempt: number): number | null
   if (error instanceof CancelledWorkError) return retryDelay(attempt);
   if (!(error instanceof WorkspaceError) || (error.code !== "offline" && error.code !== "quota" && error.code !== "permission" && error.code !== "temporary")) return null;
   return retryDelay(attempt, { retryAfterMs: error.retryAfterMs });
+}
+
+/**
+ * Creates a Drive token source that preserves API session failures as actionable provider errors.
+ * @param connectedAccountId User-scoped connected-account identity.
+ * @returns Token provider with explicit session, authorization, and API failure categories.
+ */
+function createDriveTokenProvider(connectedAccountId: string): DriveAccessTokenProvider {
+  return {
+    getAccessToken: async () => {
+      try {
+        return await getDriveAccessToken(connectedAccountId);
+      } catch (error) {
+        if (error instanceof ApiRequestError) {
+          const reference = error.requestId ? ` Diagnostic reference: ${error.requestId}.` : "";
+          if (error.status === 401) {
+            throw new WorkspaceError("permission", `Your NoteMarkdown session expired or was revoked. Sign in again before Google Drive can synchronize. Your draft remains stored locally.${reference}`, { cause: error });
+          }
+          if (error.status === 409 || error.code === "reauthorization-required") {
+            throw new WorkspaceError("permission", `Google Drive authorization must be renewed. Reconnect Google Drive before retrying; your draft remains stored locally.${reference}`, { cause: error });
+          }
+          throw new WorkspaceError("temporary", `The NoteMarkdown API could not refresh Google Drive access (HTTP ${error.status}, ${error.code}). Your draft remains stored locally and the write is queued.${reference}`, { cause: error });
+        }
+        const detail = error instanceof Error ? ` ${error.message}` : "";
+        throw new WorkspaceError("temporary", `The NoteMarkdown API could not refresh Google Drive access. Your draft remains stored locally and the write is queued.${detail}`, { cause: error });
+      }
+    },
+    invalidateAccessToken: () => invalidateDriveAccessToken(connectedAccountId),
+  };
 }
 
 /**
@@ -1226,10 +1255,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           workspaceId: repositoryWorkspace.providerWorkspaceId,
           folderId: repositoryWorkspace.folderId,
           displayName: repositoryWorkspace.name,
-          tokenProvider: {
-            getAccessToken: () => getDriveAccessToken(repositoryWorkspace.connectedAccountId!),
-            invalidateAccessToken: () => invalidateDriveAccessToken(repositoryWorkspace.connectedAccountId!),
-          },
+          tokenProvider: createDriveTokenProvider(repositoryWorkspace.connectedAccountId),
           diagnostics: createDriveDiagnostics(),
         });
         await activateProvider(provider, set, get, { ...repositoryWorkspace, lastOpenedAt: Date.now() });
@@ -1291,10 +1317,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         workspaceId: reference.id,
         folderId: reference.folderId,
         displayName: reference.displayName,
-        tokenProvider: {
-          getAccessToken: () => getDriveAccessToken(reference.connectedAccountId),
-          invalidateAccessToken: () => invalidateDriveAccessToken(reference.connectedAccountId),
-        },
+        tokenProvider: createDriveTokenProvider(reference.connectedAccountId),
         diagnostics: createDriveDiagnostics(),
       });
       await activateProvider(provider, set, get, {

@@ -16,8 +16,8 @@ interface ErrorBannerProps {
 export function ErrorBanner({ message, locale, onClose }: ErrorBannerProps) {
   return (
     <div className={styles.banner} role="alert">
-      <strong>{translate(locale, "operationFailed")}</strong>
-      <span>{message}</span>
+      <strong>{translate(locale, "workspaceProblem")}</strong>
+      <span><b>{translate(locale, "failureReason")}</b> {message}</span>
       <button type="button" onClick={onClose} aria-label={translate(locale, "close")}>×</button>
     </div>
   );
