@@ -3,7 +3,7 @@ import { createApiApp } from "./app.js";
 import type { ApiConfig } from "./config.js";
 import type { ApiRepository } from "./repository.js";
 
-const config = { publicOrigin: "https://notes.example", publicBaseUrl: "https://notes.example/notes", googleClientId: "client", secureCookies: true } as ApiConfig;
+const config = { publicOrigin: "https://notes.example", publicBaseUrl: "https://notes.example/notes", googleClientId: "client", secureCookies: true, syncDiagnosticsEnabled: true } as ApiConfig;
 
 /** Creates an API with an isolated repository double. @param overrides Repository methods under test. @returns Hono API. */
 function testApp(overrides: Partial<ApiRepository>) { return createApiApp({ config, repository: { findSessionUser: async () => "11111111-1111-4111-8111-111111111111", ...overrides } as ApiRepository }); }
@@ -31,6 +31,52 @@ describe("API security boundaries", () => {
     const response = await app.request("/api/v1/drive/workspaces", { headers: { cookie: "nm_session=valid" } });
     expect(response.status).toBe(200);
     expect(listDriveWorkspaces).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("accepts a bounded content-free client report even after its session expired", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const app = testApp({ findSessionUser: async () => null });
+    const reportId = crypto.randomUUID();
+    const response = await app.request("/api/v1/diagnostics/client-errors", {
+      method: "POST",
+      headers: { origin: config.publicOrigin, "content-type": "application/json", cookie: "nm_session=expired" },
+      body: JSON.stringify({
+        reportId,
+        createdAt: 1,
+        trigger: "workspace-error",
+        buildMode: "production",
+        pageState: { online: true, visibility: "visible", providerType: "drive", isOpening: false, isIndexing: true, entryCount: 3, tabCount: 1, saveStates: { queued: 1 } },
+        failure: { name: "WorkspaceError", code: "temporary", stackFrames: ["at saveDocument (assets/app.js:1:2)"], causeNames: ["TypeError"] },
+        metrics: { drive_metadata_request_count: 4 },
+        events: [{ timestamp: 1, operation: "provider-write", outcome: "failed", errorCode: "temporary" }],
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ reportId });
+    const logged = JSON.parse(String(consoleError.mock.calls[0]?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({ type: "client-sync-diagnostic", userId: null, reportId });
+    expect(JSON.stringify(logged)).not.toContain("nm_session");
+    consoleError.mockRestore();
+  });
+
+  it("hides the temporary diagnostics route when its runtime flag is disabled", async () => {
+    const app = createApiApp({ config: { ...config, syncDiagnosticsEnabled: false }, repository: { findSessionUser: async () => null } as unknown as ApiRepository });
+    const response = await app.request("/api/v1/diagnostics/client-errors", {
+      method: "POST",
+      headers: { origin: config.publicOrigin, "content-type": "application/json" },
+      body: JSON.stringify({
+        reportId: crypto.randomUUID(),
+        createdAt: 1,
+        trigger: "workspace-error",
+        buildMode: "production",
+        pageState: { online: true, visibility: "visible", providerType: "none", isOpening: false, isIndexing: false, entryCount: 0, tabCount: 0, saveStates: {} },
+        failure: { name: "Error", stackFrames: [], causeNames: [] },
+        metrics: {},
+        events: [],
+      }),
+    });
+    expect(response.status).toBe(404);
   });
 
   it("correlates an internal response with a reason-bearing server log without exposing the reason", async () => {

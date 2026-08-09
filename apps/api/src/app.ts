@@ -3,8 +3,8 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import type { MiddlewareHandler } from "hono";
 import {
-  ApiErrorSchema, CreateWorkspaceSchema, DriveTokenSchema, EmptySchema, IdParameterSchema, MeSchema,
-  PreferenceSchema, TokenRequestSchema, WorkspaceListSchema, DriveWorkspaceSchema,
+  ApiErrorSchema, ClientDiagnosticAcceptedSchema, ClientDiagnosticReportSchema, CreateWorkspaceSchema, DriveTokenSchema,
+  EmptySchema, IdParameterSchema, MeSchema, PreferenceSchema, TokenRequestSchema, WorkspaceListSchema, DriveWorkspaceSchema,
 } from "@note/api-contracts";
 import type { ApiConfig } from "./config.js";
 import type { ApiRepository } from "./repository.js";
@@ -18,9 +18,30 @@ const errorResponse = { description: "Stable API error", content: { "application
 /** Builds an OpenAPI JSON response declaration. @param description Response purpose. @param schema Runtime response schema. @returns OpenAPI response declaration. */
 const jsonResponse = <T extends z.ZodType>(description: string, schema: T) => ({ description, content: { "application/json": { schema } } });
 
+interface DiagnosticRateLimit { startedAt: number; count: number }
+
+/**
+ * Applies a temporary per-client diagnostic-ingestion limit.
+ * @param limits Mutable rate windows keyed by reverse-proxy client address.
+ * @param clientKey Best available client address without storing it in the report.
+ * @param now Current epoch time.
+ * @returns Whether the report may be accepted.
+ */
+function acceptDiagnosticReport(limits: Map<string, DiagnosticRateLimit>, clientKey: string, now: number): boolean {
+  const current = limits.get(clientKey);
+  if (!current || now - current.startedAt >= 60_000) {
+    limits.set(clientKey, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= 30) return false;
+  current.count += 1;
+  return true;
+}
+
 /** Builds the runtime-validated, content-blind milestone-three API. @param dependencies Configuration and durable repository. @returns Hono application and OpenAPI registry. */
 export function createApiApp({ config, repository }: AppDependencies): OpenAPIHono<{ Variables: Variables }> {
   const app = new OpenAPIHono<{ Variables: Variables }>();
+  const diagnosticRateLimits = new Map<string, DiagnosticRateLimit>();
   app.use("*", secureHeaders());
   app.use("/api/*", async (context, next) => {
     const length = Number(context.req.header("content-length") ?? 0);
@@ -44,6 +65,27 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
   app.use("/api/v1/preferences", authenticate);
   app.use("/api/v1/account", authenticate);
   app.use("/api/v1/connected-accounts/*", authenticate);
+
+  const clientDiagnostics = createRoute({
+    method: "post",
+    path: "/api/v1/diagnostics/client-errors",
+    request: { body: { content: { "application/json": { schema: ClientDiagnosticReportSchema } } } },
+    responses: {
+      202: jsonResponse("Diagnostic report accepted", ClientDiagnosticAcceptedSchema),
+      404: errorResponse,
+      429: errorResponse,
+    },
+  });
+  app.openapi(clientDiagnostics, async (context) => {
+    if (!config.syncDiagnosticsEnabled) return context.json({ error: { code: "not-found", message: "The requested resource was not found." } }, 404);
+    const clientKey = context.req.header("cf-connecting-ip") ?? context.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    if (!acceptDiagnosticReport(diagnosticRateLimits, clientKey, Date.now())) return context.json({ error: { code: "rate-limited", message: "Too many diagnostic reports were submitted." } }, 429);
+    const report = context.req.valid("json");
+    const token = getCookie(context, SESSION_COOKIE);
+    const userId = token ? await repository.findSessionUser(hashToken(token)).catch(() => null) : null;
+    console.error(JSON.stringify({ type: "client-sync-diagnostic", receivedAt: Date.now(), userId, ...report }));
+    return context.json({ reportId: report.reportId }, 202);
+  });
 
   const oauthStart = createRoute({ method: "get", path: "/api/v1/auth/google/start", request: { query: z.object({ returnTo: z.string().optional() }) }, responses: { 302: { description: "Google OAuth redirect" }, 400: errorResponse } });
   app.openapi(oauthStart, async (context) => {

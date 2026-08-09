@@ -9,6 +9,7 @@ const EnvironmentSchema = z.object({
   TOKEN_ENCRYPTION_KEYS: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(8787),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  SYNC_DIAGNOSTICS_ENABLED: z.enum(["true", "false"]).default("false"),
 });
 
 export interface ApiConfig {
@@ -21,6 +22,7 @@ export interface ApiConfig {
   currentKeyVersion: number;
   port: number;
   secureCookies: boolean;
+  syncDiagnosticsEnabled: boolean;
 }
 
 /**
@@ -50,6 +52,7 @@ export function loadConfig(): ApiConfig {
     googleClientSecret: environment.GOOGLE_CLIENT_SECRET,
     port: environment.PORT,
     secureCookies: environment.NODE_ENV !== "development",
+    syncDiagnosticsEnabled: environment.SYNC_DIAGNOSTICS_ENABLED === "true",
     ...parseKeyRing(environment.TOKEN_ENCRYPTION_KEYS),
   };
 }

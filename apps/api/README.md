@@ -80,3 +80,9 @@ pnpm --filter @note/api test:integration
 ```
 
 Keep old token-encryption key versions configured while rotating; new credentials use the highest version.
+
+## Temporary sync diagnostics
+
+Set `SYNC_DIAGNOSTICS_ENABLED=true` to expose the temporary `POST /api/v1/diagnostics/client-errors` sink. It accepts only a strict, bounded content-free report and writes one JSON line with `type: "client-sync-diagnostic"` to API `stderr`, which is searchable in local or Coolify process logs. The route intentionally also accepts reports with an expired session so session failures can be diagnosed; same-origin validation, a 64 KiB body limit, schema validation, and a temporary per-client rate limit still apply.
+
+This flag is independent of `NODE_ENV`, defaults to `false`, and should be removed or disabled after the current debugging cycle. No diagnostic database or admin API is created.
