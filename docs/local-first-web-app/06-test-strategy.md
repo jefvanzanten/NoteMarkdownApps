@@ -110,6 +110,9 @@ Required critical journeys:
 18. Confirm remote deletion of a clean and dirty open document; verify accessible destroyed-tab motion and persistent dirty-draft recovery.
 19. Open the same workspace/document in two app tabs and verify one sync leader plus explicit editing takeover.
 20. Resume from a Drive Changes cursor; handle move/delete, token invalidation, ambiguous ancestry, and full-scan fallback.
+21. In two isolated browser contexts, open the same real-provider document, append one unique line in A, require exact content in B, append and save a second unique line in B, require the exact return revision in A, and restore the original editor content/source format through a confirmed rollback upload.
+22. After a workspace is open, simulate a provider 401 followed by an expired NoteMarkdown API session; require an explicit sign-in diagnostic, a durable queued local draft, and zero Drive mutations.
+23. Seed a warm Drive workspace, terminate its leader page, auto-restore it in a new page, and simulate API 404 for the former connected account. Require follower promotion, one blocking token attempt, zero direct Drive requests, and completion before exponential backoff can accumulate.
 
 ## 3. Workspace provider contract suite
 
@@ -147,7 +150,8 @@ Every `WorkspaceProvider` implementation must pass the same behavioral suite.
 - permission loss;
 - offline and reconnection;
 - throttling/quota errors;
-- revision stability and hash behavior;
+- revision stability and hash behavior, including provider version-only drift with identical SHA-256/MD5 content identity;
+- two sequential writes after version-only drift without a false conflict or duplicate mutation;
 - stable provider entry identity and rename/move mapping;
 - metadata-only lookup without content reads;
 - incremental scan batches where supported;
@@ -226,6 +230,7 @@ For each user-owned repository/endpoint:
 - connected-account identity is scoped to internal user;
 - Drive folder references cannot be reassigned through guessed IDs;
 - session revocation applies immediately according to contract;
+- API 401, Google reauthorization-required, direct Drive 401/403, network failure, quota, and internal API 500 remain distinguishable in UI state and diagnostics;
 - account deletion is complete and idempotent.
 
 ### Database migrations
@@ -242,9 +247,11 @@ Use three layers:
 
 1. **Pure mocks** for errors, revisions, throttling, and deterministic sync tests.
 2. **HTTP fake provider** matching relevant Google response contracts for integration tests.
-3. **Dedicated Google staging project/account** for a small protected suite validating real scopes, Picker behavior, token refresh, folder operations, and revisions.
+3. **Dedicated Google staging project/account** for a small protected suite validating real scopes, Picker behavior, token refresh, folder operations, revisions, exact two-browser propagation, and rollback.
 
-Real-provider tests must never use personal production Drive data and must clean up isolated test folders.
+Real-provider tests must never use personal production Drive data and must clean up isolated test folders. Google credentials are never automated. When Google rejects Playwright-launched browsers, launch normal Chrome with a dedicated test profile and localhost-only CDP endpoint, complete OAuth interactively, and save only the resulting ignored NoteMarkdown session state. CI uses pre-provisioned/revocable staging state or skips the protected suite; it never stores a Google password.
+
+The current local two-context qualification shares one saved authenticated API session while isolating browser repository/storage state. This is sufficient for provider handoff and simulated-expiry coverage, but not for multi-session certification. Before public v1, repeat the handoff with two independently issued/revocable server sessions and, where supported, separate browser engines/devices. Local-development-to-production testing additionally requires separate auth states and linked workspace references because those origins/deployments do not share cookies or database rows.
 
 Required security cases include state/PKCE validation, redirect URI checks, denied consent, revoked grant, expired access token, refresh failure, and cross-user token mix-up prevention.
 
@@ -256,7 +263,13 @@ Drive cache/change tests additionally assert:
 - a changes cursor advances only atomically with applied pages;
 - invalid/expired tokens and ambiguous ancestry trigger a scoped full scan;
 - trashed/permanently removed entries, moves, and duplicate names map to explicit domain states;
-- the protected staging smoke suite uses a synthetic selected folder and validates the actual full `drive` scope/Picker behavior.
+- the protected staging smoke suite uses a synthetic selected folder and validates the actual full `drive` scope/Picker behavior;
+- each handoff writer produces exactly one mutation, both foreground directions receive the complete exact revision, and rollback uploads the original content;
+- an expired API session is distinguished from Drive transfer failure and reports that sign-in is required while the local draft is retained;
+- the current shared-session two-context run is supplemented by a protected two-independent-session handoff before v1;
+- legacy, unsupported-format, expired, future-retry, recent `in-flight`, abandoned `in-flight`, blocked, conflicted, and applied outbox records each follow their explicit resume policy;
+- switching workspaces fences late write completion and failure callbacks so they cannot update the new workspace UI;
+- aggregate attachments contain no workspace IDs, Drive IDs, names, paths, credentials, or content.
 
 ## 8. Browser and device matrix
 
@@ -345,6 +358,19 @@ Maintain representative corpora:
 
 Record hardware/browser/version with benchmark results. CI trend detection may use stable benchmark runners; mobile release checks may be scheduled/manual if CI variance is too high.
 
+### Current desktop real-provider baseline
+
+The 2026-08-09 local qualification on Chrome 151, Ubuntu 24.04, Ryzen 7 7700, and two isolated browser contexts measured:
+
+- cold selected-folder activation: 14.8–18.4 seconds after bounded breadth-first traversal replaced serial recursion;
+- cold metadata traffic: 338–339 requests per browser for the measured selected folder;
+- warm cached tree: 128 ms with zero metadata requests and zero content downloads;
+- explicit Drive write acknowledgement: 2.2–2.6 seconds;
+- exact foreground reader visibility: 4.2–4.6 seconds from edit and 1.1–1.4 seconds after write acknowledgement;
+- one writer mutation and a successful rollback upload of the original content in every final qualification run.
+
+This is implementation evidence, not a release budget or mobile/browser-matrix pass. The remaining cold-start request volume and passive 30-second active-document cadence are explicit v1 qualification gaps. See [Google Drive Sync Qualification](08-drive-sync-qualification.md).
+
 ## 11. Security testing
 
 - Threat model local, Drive, API, OAuth, PWA update, self-host, and contribution paths.
@@ -364,7 +390,7 @@ Security-through-obscurity is not accepted; public source must remain safe with 
 ## 12. Observability tests
 
 - Operational metrics exist for request volume, latency, errors, DB saturation, and Drive throttling/quota.
-- Trace/log correlation works without sensitive identifiers.
+- Trace/log correlation works without sensitive identifiers; an unexpected API failure returns an opaque diagnostic reference that matches the reason-bearing server log without exposing the internal exception.
 - Product event payloads validate against allowlists.
 - Detailed diagnostics are not sent without consent.
 - Consent changes take effect immediately.

@@ -79,6 +79,7 @@ The local API and Vite proxy must agree on port `8787`. Configure `apps/api/.env
 ```text
 PUBLIC_ORIGIN=http://localhost:5173
 PORT=8787
+SYNC_DIAGNOSTICS_ENABLED=true
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 DATABASE_URL=...
@@ -90,6 +91,8 @@ Configure the browser-visible Picker values in `apps/web-app/.env`:
 ```text
 VITE_GOOGLE_PICKER_API_KEY=...
 VITE_GOOGLE_APP_ID=<numeric Google Cloud project number>
+VITE_SYNC_DIAGNOSTICS_ENABLED=true
+VITE_SYNC_SLOW_ACTIVATION_MS=30000
 ```
 
 The Picker API key is browser-visible and must be restricted by HTTP referrer. Permit the exact local development origin, normally `http://localhost:5173/*`, and the production origin. Enable Google Picker/Drive APIs in the same Cloud project. Add this OAuth redirect URI to the web client:
@@ -98,7 +101,9 @@ The Picker API key is browser-visible and must be restricted by HTTP referrer. P
 http://localhost:5173/api/v1/auth/google/callback
 ```
 
-Google sign-in connects an account but does not enumerate the user's Drive. Use **Select existing folder** once per NoteMarkdown deployment/database to link the selected workspace reference. Production workspace references do not automatically appear in a separate local database.
+Google sign-in connects an account but does not enumerate the user's Drive. Use **Select existing folder** once per NoteMarkdown deployment/database to link the selected workspace reference. Production workspace references do not automatically appear in a separate local database. Local and production origins also use separate `HttpOnly` session cookies; signing in to one does not authenticate the other.
+
+If Drive-token renewal receives an API 401, the app reports that the NoteMarkdown session expired/revoked, keeps the draft locally, queues the provider write, and asks for sign-in. Google reauthorization and direct Drive/network failures have separate messages. An unexpected API 500 includes a random diagnostic reference that can be matched to the reason-bearing API server log without exposing the internal exception in the browser.
 
 Vite reads Picker environment variables at startup. Reload after an automatic Vite environment restart or restart the user-managed web process after changing `.env` when necessary.
 
@@ -108,7 +113,10 @@ The production Docker image is built for `/notes/`. Configure the Coolify web-ap
 
 ```text
 PUBLIC_ORIGIN=https://apps.jefvanzanten.dev/notes
+SYNC_DIAGNOSTICS_ENABLED=true
 ```
+
+For the temporary debugging build, also configure `VITE_SYNC_DIAGNOSTICS_ENABLED=true` and `VITE_SYNC_SLOW_ACTIVATION_MS=30000` on the web-app build. `VITE_*` values are compiled into the frontend, so Coolify must rebuild/redeploy the web app after changing them. API diagnostics are runtime-controlled and likewise require the API process to reload its environment.
 
 The Google OAuth client's authorized redirect URI must be `https://apps.jefvanzanten.dev/notes/api/v1/auth/google/callback`. The Nginx runtime removes `/notes` only when forwarding API requests to the API container.
 
@@ -125,4 +133,6 @@ Private windows intentionally provide less durable storage and are not a support
 
 ## Privacy boundary
 
-Local directories never require an account or available API. For Drive, the API stores identity, encrypted refresh credentials, preferences, and selected folder IDs/display names only. Markdown, images, file names, paths, directory trees, rendered output, diagnostics, and search queries never reach the NoteMarkdown API; content requests go directly from the browser to Google Drive.
+Local directories never require an account or available API. For Drive, the API stores identity, encrypted refresh credentials, preferences, and selected folder IDs/display names only. Markdown, images, file names, paths, directory trees, rendered output, and search queries never reach the NoteMarkdown API; content requests go directly from the browser to Google Drive.
+
+`VITE_SYNC_DIAGNOSTICS_ENABLED=true` temporarily keeps at most 300 content-free sync breadcrumbs in process memory and uploads them only after an error or operation exceeding `VITE_SYNC_SLOW_ACTIVATION_MS`. Nothing is persisted or shown as a client sync log. The matching API flag must also be enabled. Reports contain fixed state-machine categories, counts, durations, HTTP statuses, safe stack frames, and aggregate metrics—not content, names, paths, workspace/Drive IDs, request URLs/bodies, cookies, or tokens. Disable both flags after the debugging cycle.

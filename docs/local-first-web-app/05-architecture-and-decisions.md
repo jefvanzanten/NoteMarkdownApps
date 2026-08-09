@@ -55,6 +55,7 @@ Responsibilities:
 - encrypted refresh-token lifecycle;
 - opaque session lifecycle;
 - short-lived Drive access-token delivery under an authenticated session;
+- typed API failure envelopes so the browser can distinguish session expiry/revocation, Google reauthorization, and temporary/internal token-service failure;
 - linked Drive folder IDs/display names;
 - global preferences and keybindings;
 - account deletion;
@@ -271,7 +272,7 @@ A cached document can be edited while its check runs. The draft and pending-writ
 
 1. Load the encrypted repository, manifest, pending operations, and last durable Drive change cursor.
 2. If online and authenticated, obtain a short-lived access token from the API.
-3. On initial setup, acquire a start page token, perform a full selected-folder scan, and process changes since the initial token so the scan/change boundary cannot lose a mutation.
+3. On initial setup, acquire a start page token, perform a full selected-folder scan, and process changes since the initial token so the scan/change boundary cannot lose a mutation. The cold fallback traverses folder metadata in deterministic bounded breadth-first batches; it never scans outside the selected folder.
 4. On normal starts, process `changes.list` pages and commit each applied page together with its next cursor. Never advance a cursor past uncommitted changes.
 5. Filter account-wide visible changes to known workspace IDs/parents and resolve unknown or ambiguous ancestry without indexing the entire Drive.
 6. Fall back to a full selected-folder scan after token invalidation, ambiguous move/ancestry state, or a periodic visible-online safety interval (initially 24 hours, subject to measurement).
@@ -281,6 +282,8 @@ A cached document can be edited while its check runs. The draft and pending-writ
 10. Retry throttled or transient failures through the bounded scheduler using `Retry-After`, exponential backoff, and jitter.
 
 Operations require stable IDs and idempotency logic so reloads/retries do not duplicate creates or moves. Hidden app tabs pause low-priority work; current mutations are either safely completed or reconciled on resume.
+
+Drive content identity prefers SHA-256, falls back to MD5, and uses provider version/modified-time/size only when no strong checksum is available. The opaque Drive version remains useful metadata but cannot alone create a conflict when strong content identity and bytes are unchanged.
 
 ## 10. Conflict architecture
 
@@ -366,10 +369,13 @@ Every row and query that is user-owned includes and enforces user scope.
 - Server-side revocation and expiry.
 - API process holds no durable in-memory session state.
 - Same-origin deployment through reverse proxy is preferred to simplify cookie/CORS policy.
+- Sessions are origin/deployment specific. Local development and production require separate session cookies and use their own database-backed Drive workspace references.
 
 ### API contract
 
 Runtime schemas are authoritative. Types and OpenAPI are derived, not maintained separately. Request validation, response validation in tests, error envelopes, and API versioning are consistent across official and self-hosted deployments.
+
+The browser preserves HTTP status and stable API error code when acquiring a Drive token. A 401 maps to expired/revoked NoteMarkdown session state, while reauthorization-required maps to the Google connected account. Other token-service failures remain retryable without being mislabeled as a direct Drive transfer failure. Unexpected API exceptions return only a random diagnostic reference; the same reference, request method, error type, and internal reason are logged server-side without document identifiers or content.
 
 ## 14. Database
 
@@ -405,6 +411,7 @@ Database backups and restores are part of the supported self-hosting contract.
 - Validate analytics payloads against allowlisted schemas.
 - Never attach workspace IDs, Drive folder IDs, file names, paths, contents, search queries, or rendered output to telemetry.
 - Client performance uses opt-in detailed diagnostics and coarse buckets.
+- Correlate unexpected API 500 responses with opaque random request references. Client responses remain safe/generic apart from operation category and reference; reason-bearing details stay in protected server logs.
 
 ## 17. Deployment
 
@@ -444,7 +451,8 @@ Database backups and restores are part of the supported self-hosting contract.
 | Database | PostgreSQL + Drizzle | Confirmed |
 | Contracts | Runtime schemas deriving types and OpenAPI | Confirmed |
 | Drive traffic | Browser direct; API manages OAuth/session only | Confirmed |
-| Sessions | Opaque server-side sessions in secure cookies | Confirmed |
+| Sessions | Opaque server-side sessions in secure cookies; origin/deployment specific | Confirmed |
+| API/Drive error boundary | Preserve session, Google-reauthorization, internal API, and direct-provider failure categories; retain queued local drafts | Confirmed |
 | Deployment | Static CDN + API container + PostgreSQL | Confirmed |
 | Self-hosting | Official Docker Compose | Confirmed |
 | License | AGPL-3.0 with DCO | Confirmed |
@@ -453,6 +461,8 @@ Database backups and restores are part of the supported self-hosting contract.
 | Cache ownership | One provider-independent local document repository; providers perform I/O only | Confirmed |
 | Reconciliation | Metadata-first bounded priority queue; active/open documents first | Confirmed |
 | Drive discovery | Changes API after initial scan, with cursor recovery and periodic safety scan | Confirmed |
+| Cold Drive traversal | Deterministic bounded breadth-first selected-folder scan; progressive root-first render remains follow-up work | Confirmed |
+| Drive content revision | SHA-256/MD5 content identity with provider-version fallback only when no checksum exists | Confirmed |
 | Browser-tab coordination | One sync leader per workspace and one editing lease per document | Confirmed |
 
 ## 19. Implementation choices still requiring evidence
@@ -467,8 +477,9 @@ These do not reopen product decisions, but must be selected through spikes, benc
 - encryption key wrapping/unlock design;
 - exact Google scopes and Picker flow accepted by Google policy;
 - local trash implementation under File System Access limitations;
-- final adaptive queue concurrency after mobile/provider benchmarks;
-- final external-change polling/hash cadence after validating the initial active-document 30-second, open-tabs 60-second, and safety-scan 24-hour defaults;
+- final adaptive queue and cold-folder-scan concurrency after mobile/provider benchmarks; desktop real-provider evidence supports a bounded scan concurrency of 14 but does not establish a universal default;
+- progressive root-first cold Drive discovery so the first usable tree does not wait for every nested folder;
+- final external-change polling/hash cadence after validating the initial active-document 30-second, open-tabs 60-second, and safety-scan 24-hour defaults; foreground qualification measured 1.1–1.4 seconds after reconciliation begins, not passive worst-case latency;
 - encrypted manifest record layout (snapshot, per-record, or snapshot-plus-journal) after a 10,000-entry mobile benchmark;
 - autosave and adaptive render debounce values;
 - history thinning and quota defaults;

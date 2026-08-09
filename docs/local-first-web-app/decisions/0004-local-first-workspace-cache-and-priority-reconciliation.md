@@ -49,7 +49,7 @@ Introduce a framework-independent reconciler and bounded scheduler in `@note/syn
 
 The queue deduplicates in-flight work by workspace, stable entry identity, and target revision. It uses bounded adaptive concurrency, `Retry-After`, exponential backoff, and jitter. Low-priority work pauses while hidden and under data-saver or very-slow-network signals. Exact concurrency remains benchmark-driven.
 
-The active document is checked immediately when opened/activated/focused and initially every 30 seconds while visible and online. Other open tabs are initially checked every 60 seconds. Checks are deduplicated, pause while hidden/offline, and always run before a provider write. These cadences are implementation defaults subject to measurement.
+The active document is checked immediately when opened/activated/focused and initially every 30 seconds while visible and online. Other open tabs are initially checked every 60 seconds. Checks are deduplicated, pause while hidden/offline, and always run before a provider write. These cadences are implementation defaults subject to measurement. Real-provider qualification confirms approximately 1.1–1.4-second propagation after a foreground reader begins reconciliation, but an untouched reader may still wait for the active-document cadence; this is not a real-time collaboration guarantee.
 
 ### Revision model
 
@@ -62,7 +62,7 @@ Metadata observation and content processing advance independently:
 
 Observing remote `R2` while cached content is `R1` never relabels `R1` as current. A matching content download is committed before cached/index revisions advance.
 
-Drive revision/version metadata is used for metadata-first comparison. Local workspaces use `lastModified + size` as a weak startup fingerprint, retain strong content hashes as revisions, perform strong pre-write checks, and run periodic strong verification.
+Drive metadata is used for metadata-first comparison, but opaque provider `version` is not treated as content identity when a strong checksum exists. Drive content revisions prefer SHA-256, fall back to MD5, and use `version + modifiedTime + size` only when no content checksum is available. This prevents a Google version-only increment with identical bytes from producing a false conflict while retaining expected-revision checks for real content changes. Local workspaces use `lastModified + size` as a weak startup fingerprint, retain strong content hashes as revisions, perform strong pre-write checks, and run periodic strong verification.
 
 ### Provider contract
 
@@ -91,17 +91,21 @@ A remote rename/move with stable identity keeps the existing tab. Path mapping, 
 
 This cache work does not implement an incomplete automatic three-way merge. If local content based on `R1` encounters remote `R2`, base, local, and remote inputs are durably retained and provider writes enter conflict state. The planned three-way merge engine remains separate milestone-4 work.
 
+### Session and provider failure boundary
+
+Drive-token acquisition is control-plane work through the NoteMarkdown API, not direct provider transfer. Preserve that distinction through typed failures: API 401 means the NoteMarkdown session expired/revoked, API 404 means the saved workspace's connected account no longer exists, reauthorization-required means the Google grant must be renewed, and other API failures remain separate from direct Drive/network/quota failures. Missing-account and reauthorization failures block immediately instead of entering the temporary-provider exponential retry path. Every blocked write already has a durable draft/outbox record; session failure performs no Drive mutation and leaves the write queued. Outbox records carry a format version plus creation/attempt times. Legacy, unsupported, or older-than-30-day records are blocked rather than blindly replayed; a fresh explicit save replaces them. A crash-abandoned `in-flight` item is eligible for retry only after a two-minute safety interval and fresh provider-revision verification. Workspace-generation fences prevent an old workspace operation from updating the newly active workspace UI. Unexpected API exceptions expose only an opaque random correlation reference matching a protected reason-bearing server log.
+
 ### Drive Changes API
 
 Deliver change discovery as a second independently reviewable phase.
 
-Initial synchronization obtains a start page token before the full selected-folder scan, then replays changes from that token so the scan boundary loses no mutation. Normal starts use `changes.list`. Each applied page and its next cursor commit atomically.
+Initial synchronization obtains a start page token before the full selected-folder scan, then replays changes from that token so the scan boundary loses no mutation. The cold fallback traverses selected-folder metadata in deterministic bounded breadth-first batches rather than serial recursion; current desktop concurrency is benchmark-derived and remains subject to mobile/quota evidence. Normal starts use `changes.list`. Each applied page and its next cursor commit atomically.
 
 Changes can be account-wide among entries visible under the granted scope. The reconciler filters known IDs/parents to the selected workspace and resolves unknown or ambiguous ancestry without indexing the entire Drive. Token invalidation, ambiguous ancestry/moves, and an initial 24-hour visible-online safety interval trigger a selected-folder full metadata scan. The interval remains configurable and evidence-driven.
 
 ### Browser-tab coordination
 
-Only one browser tab is sync leader for a workspace. Followers read durable updates and receive notifications. Prefer Web Locks and `BroadcastChannel`, with a safe IndexedDB lease fallback.
+Only one browser tab is sync leader for a workspace. Followers read durable updates and receive notifications. Prefer Web Locks and `BroadcastChannel`, with a safe IndexedDB lease fallback. Startup activation is idempotent so duplicate React lifecycle invocation cannot orphan a leadership lock. A follower periodically promotes itself after the leader disappears; the fallback lease uses short renewable fencing so an abruptly closed leader cannot leave synchronization inert.
 
 Only one browser tab holds an editing lease for a document. Another tab opens it read-only and may explicitly take over after the current buffer is made durable and the previous owner is notified.
 
@@ -142,6 +146,8 @@ Required network outcomes:
 - one changed remote Markdown document: at most one required content download.
 
 Measure activation, manifest load, reconciliation, cache hits/misses, metadata requests, content downloads/bytes, queue latency, and indexing locally. External reporting follows existing aggregate and opt-in detailed-diagnostics consent rules and never includes workspace IDs, provider file IDs, names, paths, or content.
+
+The 2026-08-09 desktop real-provider qualification measured a 128 ms warm cached tree with zero Drive requests, compared with a 14.8–18.4-second cold selected-folder activation and 338–339 metadata requests per isolated browser. Exact foreground cross-browser visibility was 4.2–4.6 seconds from edit. These results validate the warm path and bounded scan improvement, but they do not satisfy the remaining mobile, browser-matrix, progressive-cold-tree, or passive-polling evidence requirements. See [Google Drive Sync Qualification](../08-drive-sync-qualification.md).
 
 ## Consequences
 

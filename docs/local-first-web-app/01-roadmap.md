@@ -91,6 +91,7 @@ Add a multi-user-safe API and Google Drive as the first remote workspace provide
 - Runtime-validated API contracts and generated OpenAPI specification.
 - Google sign-in and connected-account model.
 - Opaque, revocable server-side sessions in secure cookies.
+- Typed token/API failures that distinguish expired NoteMarkdown sessions, Google reauthorization, temporary/internal API failure, and direct Drive failure while retaining local drafts.
 - Encrypted refresh-token storage and key-rotation design.
 - Google Picker/folder selection with minimum practical scopes.
 - Open existing and create new Drive workspace folders.
@@ -107,6 +108,7 @@ Add a multi-user-safe API and Google Drive as the first remote workspace provide
 - The API never handles Markdown or image content.
 - A user can reconnect on another device and recover the list of linked Drive workspaces.
 - OAuth, session revocation, token encryption, and account deletion pass security tests.
+- Session expiry during Drive-token renewal performs no Drive mutation, leaves the durable draft queued, and provides an explicit sign-in action plus safe server-log correlation for unexpected failures.
 
 ## Milestone 4 — Synchronization and public v1
 
@@ -119,7 +121,8 @@ Complete the local-first Drive experience and harden the entire product for publ
 - Mirror all Markdown plus referenced images; support optional offline pinning for other images.
 - Debounced autosave and automatic foreground synchronization.
 - Resume synchronization when the open app regains connectivity.
-- Metadata-first Drive revision checks, priority reconciliation, and incremental change discovery through the Drive Changes API.
+- Metadata-first Drive revision checks using strong content identity where available, priority reconciliation, and incremental change discovery through the Drive Changes API.
+- Bounded selected-folder cold traversal plus progressive root-first rendering so first-use interactivity does not wait for every nested folder.
 - Zero content downloads for unchanged Markdown on a warm start and no routine recursive Drive scan after change-token initialization.
 - Three-way merge based on the last synchronized base.
 - Responsive visual conflict editor.
@@ -139,6 +142,10 @@ Complete the local-first Drive experience and harden the entire product for publ
 - A documented Docker Compose installation can be installed and upgraded without content loss.
 - Operational dashboards reveal traffic, errors, latency, database pressure, and Drive quota pressure.
 - Public release documentation accurately states capabilities and browser limits.
+
+### Current Drive qualification evidence
+
+The 2026-08-09 protected desktop qualification confirms an exact A → B → A foreground edit/save handoff, one mutation per handoff save, safe rollback, checksum-based revision handling, a 128 ms zero-I/O warm tree, and approximately 2.2–2.6-second provider writes. A non-mutating session-failure scenario also confirms that an API 401 is identified as session expiry, retains/queues the local draft, and reaches no Drive mutation. It does not complete milestone 4: measured cold activation remains 14.8–18.4 seconds with 338–339 metadata requests per browser, passive readers may wait for the 30-second cadence, two independently issued valid API sessions are not yet covered, and the required browser/mobile/offline/conflict matrix remains open. See [Google Drive Sync Qualification](08-drive-sync-qualification.md).
 
 ## Post-v1 roadmap
 

@@ -17,6 +17,9 @@ interface DriveSyncMetrics {
   writerMutationMs: number;
   readerVisibilityMs: number;
   visibilityAfterMutationMs: number;
+  readerMutationMs: number;
+  writerReturnVisibilityMs: number;
+  returnVisibilityAfterMutationMs: number;
   writerTraffic: DriveTraffic;
   readerTraffic: DriveTraffic;
 }
@@ -210,9 +213,11 @@ async function verifyTwoBrowserDriveSync({ browser }: { browser: Browser }, test
   const readerPage = await readerContext.newPage();
   const writerTraffic = observeDriveTraffic(writerPage);
   const readerTraffic = observeDriveTraffic(readerPage);
-  const marker = `notemarkdown-e2e-${crypto.randomUUID()}`;
+  const outboundMarker = `notemarkdown-e2e-outbound-${crypto.randomUUID()}`;
+  const returnMarker = `notemarkdown-e2e-return-${crypto.randomUUID()}`;
   let originalContent = "";
   let mutated = false;
+  let cleanupPage = writerPage;
   let primaryFailure: unknown;
   let cleanupFailure: unknown;
 
@@ -233,32 +238,51 @@ async function verifyTwoBrowserDriveSync({ browser }: { browser: Browser }, test
     expect(writerOriginal === readerOriginal, "Both browsers must begin at the same exact revision.").toBe(true);
     originalContent = writerOriginal;
     const separator = originalContent.length === 0 || originalContent.endsWith("\n") ? "" : "\n";
-    const expectedContent = `${originalContent}${separator}${marker}`;
-    const editStartedAt = performance.now();
+    const outboundContent = `${originalContent}${separator}${outboundMarker}`;
+    const outboundEditStartedAt = performance.now();
 
-    await replaceEditorContent(writerPage, expectedContent);
+    await replaceEditorContent(writerPage, outboundContent);
     mutated = true;
     const writerMutationMs = await saveToDrive(writerPage);
-    const mutationCompletedAt = performance.now();
+    const outboundMutationCompletedAt = performance.now();
 
     await readerPage.bringToFront();
     await readerPage.evaluate(dispatchWindowFocus);
 
     /**
-     * Checks exact reader content while returning no document bytes to test reports.
-     * @returns Whether the reader has the complete expected revision.
+     * Checks one page for exact content without returning document bytes to reports.
+     * @param page Browser page to inspect.
+     * @param expectedContent Complete expected editor content.
+     * @returns Whether the page has the complete expected revision.
      */
-    async function readerHasExactContent(): Promise<boolean> {
-      return await readEditorContent(readerPage) === expectedContent;
+    async function pageHasExactContent(page: Page, expectedContent: string): Promise<boolean> {
+      return await readEditorContent(page) === expectedContent;
     }
 
-    await expect.poll(readerHasExactContent, {
-      message: "The second isolated browser did not receive the exact Drive revision.",
+    await expect.poll(() => pageHasExactContent(readerPage, outboundContent), {
+      message: "The second isolated browser did not receive the exact outbound Drive revision.",
       timeout: syncTimeoutMs,
       intervals: [50, 100, 100, 200, 250],
     }).toBe(true);
 
-    const observedAt = performance.now();
+    const readerObservedAt = performance.now();
+    const returnContent = `${outboundContent}\n${returnMarker}`;
+    const returnEditStartedAt = performance.now();
+    await replaceEditorContent(readerPage, returnContent);
+    const readerMutationMs = await saveToDrive(readerPage);
+    cleanupPage = readerPage;
+    const returnMutationCompletedAt = performance.now();
+
+    await writerPage.bringToFront();
+    await writerPage.evaluate(dispatchWindowFocus);
+    await expect.poll(() => pageHasExactContent(writerPage, returnContent), {
+      message: "The original writer did not receive the exact return Drive revision after handoff.",
+      timeout: syncTimeoutMs,
+      intervals: [50, 100, 100, 200, 250],
+    }).toBe(true);
+
+    const writerObservedAt = performance.now();
+    cleanupPage = writerPage;
     const metrics: DriveSyncMetrics = {
       browserVersion: browser.version(),
       backgroundContentDeferred: process.env.E2E_DEFER_BACKGROUND_CONTENT === "true",
@@ -266,8 +290,11 @@ async function verifyTwoBrowserDriveSync({ browser }: { browser: Browser }, test
       writerActivationMs: Math.round(writerActivationMs),
       readerActivationMs: Math.round(readerActivationMs),
       writerMutationMs: Math.round(writerMutationMs),
-      readerVisibilityMs: Math.round(observedAt - editStartedAt),
-      visibilityAfterMutationMs: Math.round(observedAt - mutationCompletedAt),
+      readerVisibilityMs: Math.round(readerObservedAt - outboundEditStartedAt),
+      visibilityAfterMutationMs: Math.round(readerObservedAt - outboundMutationCompletedAt),
+      readerMutationMs: Math.round(readerMutationMs),
+      writerReturnVisibilityMs: Math.round(writerObservedAt - returnEditStartedAt),
+      returnVisibilityAfterMutationMs: Math.round(writerObservedAt - returnMutationCompletedAt),
       writerTraffic,
       readerTraffic,
     };
@@ -281,9 +308,9 @@ async function verifyTwoBrowserDriveSync({ browser }: { browser: Browser }, test
 
   if (mutated) {
     try {
-      await writerPage.bringToFront();
-      await replaceEditorContent(writerPage, originalContent);
-      await saveToDrive(writerPage);
+      await cleanupPage.bringToFront();
+      await replaceEditorContent(cleanupPage, originalContent);
+      await saveToDrive(cleanupPage);
     } catch (error) {
       cleanupFailure = error;
     }
@@ -294,4 +321,97 @@ async function verifyTwoBrowserDriveSync({ browser }: { browser: Browser }, test
   if (cleanupFailure) throw new Error("Drive verification passed, but restoring the original document failed.", { cause: cleanupFailure });
 }
 
-test("an exact Drive edit becomes readable in a second isolated browser", verifyTwoBrowserDriveSync);
+test("an exact Drive edit survives a bidirectional isolated-browser handoff", verifyTwoBrowserDriveSync);
+
+/**
+ * Verifies that an expired NoteMarkdown session remains distinguishable from Drive transfer failure.
+ * @param fixtures Playwright browser fixture.
+ * @returns Nothing after a blocked local-only edit reports its actionable reason.
+ */
+async function verifyExpiredSessionDiagnostic({ browser }: { browser: Browser }): Promise<void> {
+  const workspaceName = process.env.E2E_DRIVE_WORKSPACE ?? "vault";
+  const documentPath = process.env.E2E_DRIVE_DOCUMENT ?? "working-memory.md";
+  const workspaceTimeoutMs = getBoundedPositiveInteger(process.env.E2E_WORKSPACE_TIMEOUT_MS, 90_000, 180_000);
+  const context = await createDeviceContext(browser);
+  const page = await context.newPage();
+  const traffic = observeDriveTraffic(page);
+
+  try {
+    await openDriveWorkspace(page, workspaceName, workspaceTimeoutMs);
+    await openDocument(page, documentPath);
+    const originalContent = await readEditorContent(page);
+
+    await page.route("**/api/v1/drive/token", async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "unauthorized", message: "The session expired or was revoked." } }),
+      });
+    });
+    await page.route("https://www.googleapis.com/**", async (route) => {
+      await route.fulfill({ status: 401, contentType: "application/json", body: "{}" });
+    });
+
+    const separator = originalContent.length === 0 || originalContent.endsWith("\n") ? "" : "\n";
+    const localContent = `${originalContent}${separator}notemarkdown-e2e-expired-session-${crypto.randomUUID()}`;
+    await replaceEditorContent(page, localContent);
+    await page.locator(".cm-content[contenteditable=true]").press("Control+S");
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toContainText("session expired or was revoked", { timeout: 15_000 });
+    await expect(alert).toContainText("Sign in again before Google Drive can synchronize");
+    await expect(alert).toContainText("draft remains stored locally");
+    await expect(page.locator("footer [data-state=queued]")).toBeVisible();
+    expect(await readEditorContent(page)).toBe(localContent);
+    expect(traffic.mutations, "A simulated expired session must not reach a Drive mutation.").toBe(0);
+  } finally {
+    await context.close();
+  }
+}
+
+test("an expired server session reports an actionable local-draft diagnostic", verifyExpiredSessionDiagnostic);
+
+/**
+ * Verifies that an auto-restored workspace with a removed connected account fails promptly instead of retrying for minutes.
+ * @param fixtures Playwright browser fixture.
+ * @returns Nothing after the warm workspace reports one blocking token failure.
+ */
+async function verifyRemovedConnectedAccountStopsPromptly({ browser }: { browser: Browser }): Promise<void> {
+  const workspaceName = process.env.E2E_DRIVE_WORKSPACE ?? "vault";
+  const workspaceTimeoutMs = getBoundedPositiveInteger(process.env.E2E_WORKSPACE_TIMEOUT_MS, 90_000, 180_000);
+  const context = await createDeviceContext(browser);
+  await context.addInitScript(enableDataSaverMode);
+  const seedPage = await context.newPage();
+
+  try {
+    const initialReconciliation = seedPage.waitForResponse((response) => response.ok() && response.url().includes("/drive/v3/changes"), { timeout: workspaceTimeoutMs });
+    await openDriveWorkspace(seedPage, workspaceName, workspaceTimeoutMs);
+    await initialReconciliation;
+    await seedPage.close();
+
+    const restoredPage = await context.newPage();
+    let tokenRequests = 0;
+    let driveRequests = 0;
+    await restoredPage.route("**/api/v1/drive/token", async (route) => {
+      tokenRequests += 1;
+      await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not-found", message: "Connected account was not found." } }) });
+    });
+    await restoredPage.route("https://www.googleapis.com/**", async (route) => {
+      driveRequests += 1;
+      await route.abort();
+    });
+
+    const startedAt = performance.now();
+    await restoredPage.goto(getE2eBaseUrl());
+    await expect(restoredPage.locator("[role=tree]")).toBeVisible({ timeout: 5_000 });
+    await expect.poll(() => tokenRequests, { message: "The restored workspace never attempted token acquisition.", timeout: 12_000 }).toBe(1);
+    await expect(restoredPage.getByRole("alert")).toContainText("saved workspace is no longer available", { timeout: 3_000 });
+    expect(performance.now() - startedAt, "A removed connected account must fail before exponential provider retries accumulate.").toBeLessThan(15_000);
+    expect(tokenRequests, "The blocking missing-account response must not be retried.").toBe(1);
+    expect(driveRequests, "No direct Drive request is possible without a valid connected account.").toBe(0);
+  } finally {
+    await context.close();
+  }
+}
+
+test("a removed connected account does not trap an old workspace in retries", verifyRemovedConnectedAccountStopsPromptly);

@@ -24,6 +24,7 @@ Open the editor quickly and continue where work stopped.
 - Drive actions trigger Google authentication only when necessary.
 - Restore a usable local manifest, tabs, active cached document, and warm search state before remote reconciliation. A local-directory cache remains locked until filesystem permission is confirmed; an encrypted Drive cache remains usable when its device key is available even if reauthentication is required for sync.
 - Reconcile through one bounded priority queue: active document, other open tabs, pending writes/conflicts, then remaining new or changed documents.
+- During a cold Drive activation, expose truthful authentication/scan/restore/index phases and make the first useful selected-folder level available without presenting an indeterminate complete-tree wait as progress.
 
 ### Acceptance criteria
 
@@ -72,6 +73,8 @@ Use one Drive folder as a cross-device, cross-browser Markdown workspace.
 - Synchronize only while the app is open: at open, during use, and after reconnection.
 - Expose queue, progress, checking, incomplete-index, errors, retry, and conflict states.
 - Use metadata-first revision checks and download content only when the observed provider revision differs from the cached-content revision.
+- Prefer SHA-256/MD5 content identity for Drive revisions. Treat an opaque provider-version change with the same strong checksum and size as unchanged content rather than a conflict.
+- Traverse initial selected-folder metadata with deterministic bounded concurrency, never outside the selected folder, and progressively expose usable tree state while deeper discovery continues.
 - After initialization, use Drive Changes tokens for normal delta discovery. Fall back to a full scan for missing/invalid tokens, ambiguous ancestry changes, and a periodic visible-online safety check.
 - In-app Drive sharing management is not provided.
 
@@ -82,6 +85,8 @@ Use one Drive folder as a cross-device, cross-browser Markdown workspace.
 - The cached workspace remains usable offline according to repository retention and locking rules.
 - Explicit logout locks retained repository content.
 - A warm start with no remote changes downloads zero Markdown content; one changed document causes at most one required content download.
+- A Google version-only increment with identical strong content identity does not create a false conflict.
+- Cold activation identifies its current phase and remains responsive/cancellable while selected-folder metadata is discovered.
 
 ## F04 — File sidebar
 
@@ -239,19 +244,22 @@ Avoid losing work without repeatedly invoking Save.
 ### Requirements
 
 - Persist changes to a local draft after a short debounce.
-- Persist an idempotent pending-write record with the expected base revision for every document intended for provider synchronization.
+- Persist an idempotent pending-write record with the expected base revision, outbox format version, creation time, and last-attempt time for every document intended for provider synchronization.
 - Write local-provider content or enqueue Drive writes after local durability.
 - Make `Ctrl/Cmd+S` request immediate processing.
-- Show distinct local-persistence and provider-sync states where relevant.
+- Show distinct local-persistence and provider-sync states where relevant. Drive uses provider-specific language such as syncing, synchronized, queued, offline, and conflict rather than local-disk wording.
 - Use adaptive behavior for very large files without sacrificing safety.
 - Recover durable drafts after crash/reload.
 - Never label a document fully synchronized while a provider write is pending, failed, or conflicted.
+- When token acquisition fails, distinguish NoteMarkdown session expiry/revocation, Google reauthorization, internal API failure, and direct Drive/provider failure. State explicitly that the draft remains local and whether the write is queued.
 
 ### Acceptance criteria
 
 - Closing/reopening after a network failure recovers typed Drive changes.
-- A provider revision mismatch preserves base, local, and remote inputs and routes to conflict/merge rather than overwrite.
+- A provider content-revision mismatch preserves base, local, and remote inputs and routes to conflict/merge rather than overwrite; provider version-only drift with the same strong checksum is not a content conflict.
 - Editing from an unverified warm cache remains locally durable, while its provider write waits for metadata verification.
+- A NoteMarkdown API 401 during Drive-token renewal performs no Drive mutation, keeps the draft durable and queued, and presents an explicit sign-in action rather than a generic operation/provider error.
+- Legacy, unsupported-format, or more-than-30-day-old outbox items are never uploaded automatically. They become blocked while the draft remains durable; an explicit fresh save creates a current write. An `in-flight` item abandoned by a terminated runtime becomes resumable only after a bounded safety interval and fresh provider-revision verification.
 
 ## F11 — Offline behavior and synchronization
 
@@ -426,13 +434,15 @@ Connect Drive securely without requiring an account for local work.
 - Use revocable server sessions and secure cookies.
 - Let users disconnect Google and delete their NoteMarkdown account.
 - Account deletion removes NoteMarkdown metadata, sessions, tokens, and preferences only.
-- Linked Drive workspaces reappear on new devices after sign-in.
+- Linked Drive workspaces reappear on new devices after sign-in to the same NoteMarkdown deployment. Sessions and linked workspace references are deployment/origin specific; a local development database does not inherit production sessions or references.
+- Distinguish an expired/revoked NoteMarkdown session from a connected Google account that requires renewed authorization.
 - In-app Drive sharing controls are out of scope.
 
 ### Acceptance criteria
 
 - One user's tokens and workspace references are inaccessible to every other user.
 - Local workspace functionality remains available when signed out or the API is unavailable.
+- Session-expiry and Google-reauthorization paths preserve every durable local draft and provide different actionable messages.
 
 ## F19 — Observability and diagnostics consent
 
@@ -446,6 +456,7 @@ Receive a reliable product without sacrificing document privacy.
 - Collect minimal aggregate product usage by default under a published schema.
 - Ask explicit consent for detailed client crash and performance diagnostics.
 - Never include document content, file names, paths, directory structure, or permanent fingerprints.
+- Correlate unexpected API failures with a random diagnostic reference present in both the safe client response and a reason-bearing server log. Never expose the internal exception to the client.
 - Let self-hosters disable non-operational collection.
 - Use replaceable OpenTelemetry, analytics, and crash adapters.
 

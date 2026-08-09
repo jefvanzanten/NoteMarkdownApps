@@ -72,7 +72,9 @@
 - Saving and synchronization state must be visible and understandable: saving, saved, checking, offline, queued, syncing, conflict, retrying, incomplete, permission-required, locked, or blocked.
 - Never use a success state before local durability is confirmed.
 - Never hide a failed or conflicted provider write behind a generic “saved” label.
-- Errors must explain whether work is safe locally and what the user can do next.
+- Errors must explain the concrete failure category, whether work is safe locally, and what the user can do next. In particular, distinguish an expired/revoked NoteMarkdown session, renewable Google authorization, provider transport/offline failure, quota/throttling, conflict, and an internal API failure.
+- Never flatten session/token acquisition failures into a generic provider-reachability message. A blocked Drive write states that its draft remains durable and whether the operation is queued.
+- Unexpected API failures expose a random correlation reference shared with the reason-bearing server log, never the internal exception or sensitive request data.
 
 ### Destructive actions
 
@@ -92,7 +94,7 @@ WCAG 2.2 AA is a v1 release requirement.
 - Color is never the sole status indicator.
 - Light and dark themes meet contrast requirements.
 - Respect reduced motion and reduced transparency preferences where relevant.
-- Dynamic search, save, sync, and conflict updates use appropriate non-disruptive announcements.
+- Dynamic search, save, sync, remote-update, and conflict updates use appropriate non-disruptive announcements. Provider sync uses provider-accurate wording; Drive must not report a completed provider write as merely “saved to disk.”
 - Mobile touch targets meet accessible sizing expectations.
 - Automated checks do not replace keyboard and screen-reader review.
 
@@ -133,7 +135,7 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - Approximately 10,000 supported files.
 - Up to approximately 10 MB per Markdown document.
 - File trees and search results must be virtualized when needed.
-- Scanning and indexing are incremental and worker-based.
+- Scanning and indexing are incremental and worker-based. A cold remote workspace exposes useful root state and truthful phase progress before every nested folder is discovered.
 - Syntax highlighters load only for languages present in rendered code blocks.
 - On defined lower-end mobile benchmark hardware, a cached 10,000-entry workspace must restore its tree, tabs, active cached document, and warm search state to an interactive UI within one second, without waiting for provider I/O.
 - A warm Drive start with no changes performs zero Markdown content downloads. One changed remote Markdown document causes at most one required content download.
@@ -145,7 +147,7 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - Autosave is debounced; `Ctrl/Cmd+S` requests immediate processing.
 - Reconnect synchronization is automatic only while the app is open.
 - Do not promise closed-app background Drive synchronization.
-- Detect changes made by other tools and never silently overwrite them.
+- Detect changes made by other tools and never silently overwrite them. Strong content identity decides Drive content conflicts when available; provider version-only drift with identical SHA-256/MD5 identity is not an external content edit.
 - Store enough base revision data for deterministic three-way merge.
 - Preserve both sides until a conflict is explicitly resolved.
 - PWA updates never force-reload an active session; prompt after work is safe.
@@ -155,6 +157,7 @@ Budgets must be calibrated against documented representative desktop and lower-e
 - Confirmed remote deletion closes clean tabs promptly. Dirty content is retained as a recovery item and never silently discarded.
 - Only one app tab leads synchronization for a workspace, and only one tab holds a document editing lease at a time.
 - Hidden app tabs pause low-priority reconciliation; offline, data-saver, throttling, and quota states degrade without blocking local editing.
+- Session expiry or revocation during Drive-token renewal cannot mutate Drive or discard the draft. It produces a permission-required/sign-in state and leaves the durable provider write queued.
 
 ## 11. History and retention
 

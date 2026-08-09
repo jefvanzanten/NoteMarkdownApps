@@ -20,7 +20,7 @@ A provider identity linked to a NoteMarkdown user. In v1 the only connected-acco
 
 ### Session
 
-A revocable authenticated API session. The browser receives only an opaque identifier in a secure, HTTP-only cookie. API instances remain stateless; durable session state is server-side.
+A revocable authenticated API session. The browser receives only an opaque identifier in a secure, HTTP-only cookie. API instances remain stateless; durable session state is server-side. A session belongs to one NoteMarkdown origin/deployment and is distinct from the connected Google account/grant; authenticating to production does not authenticate localhost or another deployment.
 
 ### Workspace
 
@@ -72,11 +72,11 @@ A durable local representation of editor changes that may not yet have reached t
 
 ### Revision
 
-A known version of a file. A revision may be represented by Drive revision metadata, a strong local content hash, or a local history ID.
+A known content state of a file. A Drive revision prefers SHA-256/MD5 content identity and falls back to opaque provider version plus modified time and size only when no strong checksum exists. Local revisions use strong content hashes; local history IDs identify retained recovery snapshots.
 
 ### Metadata fingerprint
 
-A lightweight provider observation used to decide whether stronger work may be necessary. Drive version/checksum metadata can identify content revisions; a local `lastModified + size` fingerprint is weaker and never replaces a strong pre-write content-hash check.
+A lightweight provider observation used to decide whether stronger work may be necessary. Drive parent/path/version metadata supplements strong checksum content identity; an opaque Drive version-only increment is not a content conflict when strong identity is unchanged. A local `lastModified + size` fingerprint is weaker and never replaces a strong pre-write content-hash check.
 
 ### Observed provider revision
 
@@ -285,4 +285,4 @@ Opt-in client crash and performance data, including appropriately bucketed works
 - `conflicted`
 - `failed`
 
-The exact TypeScript representation may differ, but UI, telemetry, and tests should use one shared semantic vocabulary.
+The exact TypeScript representation may differ, but UI, telemetry, and tests should use one shared semantic vocabulary. User-facing wording is provider-aware: local completion may say “saved to disk,” while Drive completion says “synced to Google Drive.”

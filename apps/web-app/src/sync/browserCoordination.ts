@@ -1,5 +1,8 @@
 import { openDatabase } from "@note/browser-storage";
 
+const WORKSPACE_LEASE_TTL_MS = 5_000;
+const WORKSPACE_LEASE_POLL_MS = 1_000;
+
 interface LeaseRecord {
   resource: string;
   ownerToken: string;
@@ -116,60 +119,73 @@ export async function acquireWorkspaceLeadership(
   const resource = `workspace:${workspaceId}`;
 
   if (navigator.locks) {
-    let releaseLock = (): void => undefined;
-    let resolveAcquired: (acquired: boolean) => void = () => undefined;
-    const acquired = new Promise<boolean>((resolve) => { resolveAcquired = resolve; });
-    void navigator.locks.request(resource, { ifAvailable: true }, async (lock) => {
-      if (!lock) {
-        resolveAcquired(false);
-        return;
-      }
-      resolveAcquired(true);
-      await new Promise<void>((resolve) => { releaseLock = resolve; });
-    });
-    if (!await acquired) {
-      return {
-        isLeader: false,
-        fencingToken: 0,
-        broadcastGeneration: () => undefined,
-        requestSync: () => channel?.postMessage({ requestSync: true }),
-        isCurrent: async () => false,
-        release: async () => { channel?.close(); },
-      };
-    }
+    let leader = false;
+    let released = false;
+    let attempting = false;
+    let releaseLock: (() => void) | null = null;
+
+    /**
+     * Attempts one non-blocking Web Lock promotion.
+     * @returns Whether this tab acquired leadership.
+     */
+    const attemptLeadership = async (): Promise<boolean> => {
+      if (released || leader || attempting) return leader;
+      attempting = true;
+      let resolveAcquired: (acquired: boolean) => void = () => undefined;
+      const acquired = new Promise<boolean>((resolve) => { resolveAcquired = resolve; });
+      void navigator.locks.request(resource, { ifAvailable: true }, async (lock) => {
+        attempting = false;
+        if (!lock || released) {
+          resolveAcquired(false);
+          return;
+        }
+        leader = true;
+        resolveAcquired(true);
+        await new Promise<void>((resolve) => { releaseLock = resolve; });
+        releaseLock = null;
+        leader = false;
+      });
+      return acquired;
+    };
+
+    const initiallyLeader = await attemptLeadership();
+    const promotionTimer = window.setInterval(() => {
+      if (leader || released) return;
+      void attemptLeadership().then((promoted) => { if (promoted) onSyncRequested(); });
+    }, 1_000);
     return {
-      isLeader: true,
-      fencingToken: 1,
+      get isLeader() { return leader; },
+      fencingToken: initiallyLeader ? 1 : 0,
       broadcastGeneration: (generation) => channel?.postMessage({ generation }),
-      requestSync: () => undefined,
-      isCurrent: async () => true,
+      requestSync: () => { if (!leader) channel?.postMessage({ requestSync: true }); },
+      isCurrent: async () => leader && !released,
       release: async () => {
-        releaseLock();
+        released = true;
+        window.clearInterval(promotionTimer);
+        releaseLock?.();
         channel?.close();
       },
     };
   }
 
-  let lease = await acquireLease(resource, ownerToken, 15_000);
-  if (!lease) {
-    return {
-      isLeader: false,
-      fencingToken: 0,
-      broadcastGeneration: () => undefined,
-      requestSync: () => channel?.postMessage({ requestSync: true }),
-      isCurrent: async () => false,
-      release: async () => { channel?.close(); },
-    };
-  }
+  let lease = await acquireLease(resource, ownerToken, WORKSPACE_LEASE_TTL_MS);
+  let released = false;
   const heartbeat = window.setInterval(() => {
-    void acquireLease(resource, ownerToken, 15_000).then((renewed) => { if (renewed) lease = renewed; });
-  }, 5_000);
+    if (released) return;
+    const wasLeader = lease !== null;
+    void acquireLease(resource, ownerToken, WORKSPACE_LEASE_TTL_MS).then((renewed) => {
+      if (!renewed || released) return;
+      lease = renewed;
+      if (!wasLeader) onSyncRequested();
+    });
+  }, WORKSPACE_LEASE_POLL_MS);
   return {
-    isLeader: true,
-    fencingToken: lease.fencingToken,
+    get isLeader() { return lease !== null; },
+    get fencingToken() { return lease?.fencingToken ?? 0; },
     broadcastGeneration: (generation) => channel?.postMessage({ generation, fencingToken: lease?.fencingToken }),
-    requestSync: () => undefined,
+    requestSync: () => { if (!lease) channel?.postMessage({ requestSync: true }); },
     isCurrent: async () => {
+      if (!lease || released) return false;
       const database = await openDatabase();
       try {
         const current = await result(database.transaction("coordinationLeases").objectStore("coordinationLeases").get(resource)) as LeaseRecord | undefined;
@@ -179,6 +195,7 @@ export async function acquireWorkspaceLeadership(
       }
     },
     release: async () => {
+      released = true;
       window.clearInterval(heartbeat);
       if (lease) await releaseLease(lease);
       channel?.close();

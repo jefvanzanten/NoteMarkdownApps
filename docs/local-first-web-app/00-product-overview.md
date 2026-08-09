@@ -168,3 +168,5 @@ Account deletion removes NoteMarkdown account data and provider connections, nev
 ## v1 completion
 
 `v1.0` is not the first local prototype. It is reached only after all roadmap milestones deliver local-first editing, PWA/offline behavior, Drive authentication and synchronization, cross-browser hardening, accessibility, performance, migration safety, and public-release quality.
+
+Current protected desktop Drive evidence supports an MVP/private-beta sync verdict but leaves cold progressive discovery, passive propagation cadence, and the browser/mobile/conflict matrix open. See [Google Drive Sync Qualification](08-drive-sync-qualification.md).
