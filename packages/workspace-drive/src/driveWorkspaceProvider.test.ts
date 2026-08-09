@@ -3,6 +3,15 @@ import { DriveWorkspaceProvider } from "./driveWorkspaceProvider";
 
 beforeEach(() => { vi.stubGlobal("navigator", { onLine: true }); });
 
+/**
+ * Pauses an asynchronous test operation.
+ * @param milliseconds Delay duration.
+ * @returns Nothing after the timer completes.
+ */
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
 describe("DriveWorkspaceProvider privacy boundary", () => {
   it("downloads content directly from Google and mirrors the decoded document", async () => {
     const mirrored: string[] = [];
@@ -20,9 +29,32 @@ describe("DriveWorkspaceProvider privacy boundary", () => {
     expect(fetchMock.mock.calls.every(([url]) => String(url).startsWith("https://www.googleapis.com/"))).toBe(true);
   });
 
+  it("scans independent Drive folders with bounded concurrency", async () => {
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const query = new URL(String(input)).searchParams.get("q") ?? "";
+      if (query.startsWith("'folder-1'")) {
+        return new Response(JSON.stringify({ files: Array.from({ length: 16 }, (_, index) => ({
+          id: `folder-${index + 2}`,
+          name: `Folder ${index + 1}`,
+          mimeType: "application/vnd.google-apps.folder",
+        })) }), { status: 200 });
+      }
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await delay(10);
+      activeRequests -= 1;
+      return new Response(JSON.stringify({ files: [] }), { status: 200 });
+    }));
+    const provider = new DriveWorkspaceProvider({ workspaceId: "workspace-1", folderId: "folder-1", displayName: "Notes", tokenProvider: { getAccessToken: async () => "short-token" } });
+    expect(await provider.listEntries()).toHaveLength(16);
+    expect(maximumActiveRequests).toBe(14);
+  });
+
   it("uses a revision-matched mirror without an alt=media request", async () => {
     const requests: string[] = [];
-    const revision = { id: "7:checksum:2025-01-01T00:00:00Z", modifiedAt: Date.parse("2025-01-01T00:00:00Z"), size: 7 };
+    const revision = { id: "md5:checksum:7", modifiedAt: Date.parse("2025-01-01T00:00:00Z"), size: 7 };
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       requests.push(url);
@@ -56,6 +88,27 @@ describe("DriveWorkspaceProvider privacy boundary", () => {
     const metadata = await provider.getEntryMetadata({ entryId: "stable-1", path: "note.md" });
     expect(metadata).toMatchObject({ entryId: "stable-1", path: "renamed.md", state: "live" });
     expect(requests.some((url) => url.includes("alt=media"))).toBe(false);
+  });
+
+  it("accepts a second write after Google advances only its internal version", async () => {
+    const original = { id: "stable-1", name: "note.md", mimeType: "text/markdown", modifiedTime: "2025-01-01T00:00:00Z", size: "7", version: "27", md5Checksum: "original-sum", parents: ["folder-1"] };
+    const changed = { ...original, modifiedTime: "2025-01-02T00:00:00Z", size: "8", version: "29", md5Checksum: "changed-sum" };
+    let uploadCount = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/drive/v3/files?")) return new Response(JSON.stringify({ files: [original] }), { status: 200 });
+      if (url.includes("/drive/v3/files/stable-1?fields=")) return new Response(JSON.stringify(uploadCount === 0 ? original : changed), { status: 200 });
+      if (url.includes("/upload/drive/v3/files/stable-1")) {
+        uploadCount += 1;
+        return new Response(JSON.stringify(uploadCount === 1 ? { ...changed, version: "28" } : { ...original, version: "30" }), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    }));
+    const provider = new DriveWorkspaceProvider({ workspaceId: "workspace-1", folderId: "folder-1", displayName: "Notes", tokenProvider: { getAccessToken: async () => "short-token" } });
+    const initial = (await provider.listEntries())[0].revision!;
+    const firstWrite = await provider.writeDocument({ path: "note.md", content: "changed!", format: { hasBom: false, lineEnding: "\n" }, expectedRevision: initial });
+    await expect(provider.writeDocument({ path: "note.md", content: "initial", format: { hasBom: false, lineEnding: "\n" }, expectedRevision: firstWrite })).resolves.toMatchObject({ id: "md5:original-sum:7" });
+    expect(uploadCount).toBe(2);
   });
 
   it("uses a durable Changes cursor and scopes rename metadata without a folder scan", async () => {

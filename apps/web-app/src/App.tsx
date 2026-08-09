@@ -68,19 +68,20 @@ function useAutosave(tabs: OpenDocument[], saveDocument: (path: string) => Promi
  * Maps domain save state to localized visible status.
  * @param document Active document snapshot.
  * @param locale Active UI locale.
+ * @param isDrive Whether the provider saves directly to Google Drive.
  * @returns User-facing save status.
  */
-function saveStatus(document: OpenDocument, locale: Locale): string {
+function saveStatus(document: OpenDocument, locale: Locale, isDrive: boolean): string {
   if (document.editingState === "read-only") return translate(locale, "readOnlyLease");
   switch (document.saveState) {
     case "checking": return translate(locale, "checking");
     case "dirty-local": return translate(locale, "dirty");
-    case "persisting-local": return translate(locale, "saving");
+    case "persisting-local": return translate(locale, isDrive ? "syncingDrive" : "saving");
     case "queued": return translate(locale, "queued");
     case "destroyed": return translate(locale, "removedExternally");
     case "conflicted": return translate(locale, "conflict");
     case "error-blocking": return translate(locale, "saveError");
-    default: return translate(locale, "saved");
+    default: return translate(locale, isDrive ? "syncedDrive" : "saved");
   }
 }
 
@@ -377,7 +378,7 @@ export function App() {
           <div className={styles.treeScroll}>
             {query.trim() ? <SearchResults results={searchResults} locale={locale} onOpen={handleOpenDocument} /> : <FileTree entries={entries} query="" selectedPath={selectedPath} locale={locale} onOpenDocument={handleOpenDocument} onSelect={selectPath} />}
           </div>
-          <div className={styles.sidebarFooter}><span aria-hidden="true">●</span>{isIndexing ? translate(locale, "indexing") : `local / ${isOnline ? "direct" : "offline"}`}</div>
+          <div className={styles.sidebarFooter}><span aria-hidden="true">●</span>{isIndexing ? translate(locale, "indexing") : provider.id.startsWith("drive:") ? `Google Drive / ${isOnline ? "online" : "offline"}` : `local / ${isOnline ? "direct" : "offline"}`}</div>
           <div className={styles.resizer} role="separator" aria-orientation="vertical" onPointerDown={startSidebarResize} />
         </aside>
 
@@ -387,8 +388,6 @@ export function App() {
             {activeDocument ? (
               <div className={styles.modeToggle} role="group" aria-label={`${translate(locale, "editor")} / ${translate(locale, "preview")}`}>
                 {activeDocument.editingState === "read-only" ? <button type="button" onClick={() => void requestEditingTakeover(activeDocument.path)}>{translate(locale, "takeOverEditing")}</button> : null}
-                <button type="button" onClick={() => setDialog("history")}>{translate(locale, "history")}</button>
-                <button type="button" onClick={() => window.print()}>{translate(locale, "print")}</button>
                 <button type="button" className={activeDocument.viewMode === "editor" ? styles.modeActive : ""} onClick={() => setViewMode(activeDocument.path, "editor")}>{translate(locale, "editor")}</button>
                 <button type="button" className={activeDocument.viewMode === "preview" ? styles.modeActive : ""} onClick={() => setViewMode(activeDocument.path, "preview")}>{translate(locale, "preview")}</button>
               </div>
@@ -430,7 +429,7 @@ export function App() {
 
           <footer className={styles.statusbar}>
             <span>{activeDocument?.path ?? provider.name}</span>
-            <span aria-live="polite" data-state={activeDocument?.saveState}>{!isOnline ? translate(locale, "offline") : activeDocument ? saveStatus(activeDocument, locale) : "local"}</span>
+            <span aria-live="polite" data-state={activeDocument?.saveState}>{!isOnline ? translate(locale, "offline") : activeDocument ? saveStatus(activeDocument, locale, provider.id.startsWith("drive:")) : provider.id.startsWith("drive:") ? "Google Drive" : "local"}</span>
           </footer>
         </main>
       </div>

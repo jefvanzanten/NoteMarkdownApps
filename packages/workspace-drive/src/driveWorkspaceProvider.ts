@@ -20,7 +20,8 @@ import {
 } from "@note/workspace-core";
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";
-const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,size,md5Checksum,version,parents,trashed";
+const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,size,md5Checksum,sha256Checksum,version,parents,trashed";
+const DRIVE_SCAN_CONCURRENCY = 14;
 
 interface DriveFile {
   id: string;
@@ -29,6 +30,7 @@ interface DriveFile {
   modifiedTime?: string;
   size?: string;
   md5Checksum?: string;
+  sha256Checksum?: string;
   version?: string;
   parents?: string[];
   trashed?: boolean;
@@ -40,6 +42,12 @@ interface DriveChange {
   fileId: string;
   removed?: boolean;
   file?: DriveFile;
+}
+
+interface DriveScanTask {
+  parentId: string;
+  prefix: string;
+  target: WorkspaceEntry[];
 }
 
 export type DriveRequestKind = "metadata" | "list" | "change" | "content" | "mutation";
@@ -113,10 +121,15 @@ function driveError(response: Response): WorkspaceError {
  */
 function revision(file: DriveFile): WorkspaceRevision {
   if (file.knownRevision) return file.knownRevision;
+  const size = Number(file.size ?? 0);
+  const checksum = file.sha256Checksum ?? file.md5Checksum;
+  const checksumAlgorithm = file.sha256Checksum ? "sha256" : "md5";
   return {
-    id: `${file.version ?? "0"}:${file.md5Checksum ?? "none"}:${file.modifiedTime ?? "unknown"}`,
+    id: checksum
+      ? `${checksumAlgorithm}:${checksum}:${size}`
+      : `version:${file.version ?? "0"}:${file.modifiedTime ?? "unknown"}:${size}`,
     modifiedAt: Date.parse(file.modifiedTime ?? "") || 0,
-    size: Number(file.size ?? 0),
+    size,
   };
 }
 
@@ -432,36 +445,50 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
   }
 
   /**
-   * Retains metadata maps and recursively creates a shared tree.
+   * Retains metadata maps and creates a shared tree with bounded breadth-first requests.
    * @param parentId Current Drive folder ID.
    * @param prefix Workspace-relative parent path.
    * @returns Supported child entries with explicit collision state.
    */
   private async scan(parentId: string, prefix = ""): Promise<WorkspaceEntry[]> {
     const result: WorkspaceEntry[] = [];
-    const children = await this.listChildren(parentId);
-    const nameCounts = new Map<string, number>();
-    for (const file of children) nameCounts.set(file.name, (nameCounts.get(file.name) ?? 0) + 1);
+    const queue: DriveScanTask[] = [{ parentId, prefix, target: result }];
 
-    for (const file of children) {
-      const kind = classifyDriveFile(file);
-      if (!kind) continue;
-      const path = prefix ? `${prefix}/${file.name}` : file.name;
-      const collided = (nameCounts.get(file.name) ?? 0) > 1;
-      this.filesById.set(file.id, file);
-      this.pathsById.set(file.id, path);
-      if (collided) this.collisions.add(path);
-      result.push({
-        kind,
-        name: file.name,
-        path,
-        entryId: file.id,
-        parentEntryId: parentId,
-        revision: kind === "document" || kind === "image" ? revision(file) : undefined,
-        metadataFingerprint: metadataFingerprint(file),
-        state: collided ? "path-collision" : "live",
-        children: kind === "directory" ? await this.scan(file.id, path) : undefined,
-      });
+    while (queue.length > 0) {
+      const batch = queue.splice(0, DRIVE_SCAN_CONCURRENCY);
+      const childRequests: Array<Promise<DriveFile[]>> = [];
+      for (const task of batch) childRequests.push(this.listChildren(task.parentId));
+      const childBatches = await Promise.all(childRequests);
+
+      for (let taskIndex = 0; taskIndex < batch.length; taskIndex += 1) {
+        const task = batch[taskIndex];
+        const children = childBatches[taskIndex];
+        const nameCounts = new Map<string, number>();
+        for (const file of children) nameCounts.set(file.name, (nameCounts.get(file.name) ?? 0) + 1);
+
+        for (const file of children) {
+          const kind = classifyDriveFile(file);
+          if (!kind) continue;
+          const path = task.prefix ? `${task.prefix}/${file.name}` : file.name;
+          const collided = (nameCounts.get(file.name) ?? 0) > 1;
+          const nestedEntries: WorkspaceEntry[] | undefined = kind === "directory" ? [] : undefined;
+          this.filesById.set(file.id, file);
+          this.pathsById.set(file.id, path);
+          if (collided) this.collisions.add(path);
+          task.target.push({
+            kind,
+            name: file.name,
+            path,
+            entryId: file.id,
+            parentEntryId: task.parentId,
+            revision: kind === "document" || kind === "image" ? revision(file) : undefined,
+            metadataFingerprint: metadataFingerprint(file),
+            state: collided ? "path-collision" : "live",
+            children: nestedEntries,
+          });
+          if (nestedEntries) queue.push({ parentId: file.id, prefix: path, target: nestedEntries });
+        }
+      }
     }
     return result;
   }

@@ -1459,6 +1459,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const timer = draftTimers.get(path);
     if (timer) window.clearTimeout(timer);
     draftTimers.delete(path);
+    set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState: "persisting-local" } : tab) }));
     const pendingWrite: PendingDocumentWrite = {
       id: `document:${snapshot.entryId}`,
       workspaceId: provider.id,
@@ -1483,7 +1484,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await checkpoint(provider.id, snapshot, "provider-save");
       const writeStartedAt = Date.now();
       recordSyncDiagnostic({ operation: "provider-write", outcome: "started", attempt: pendingWrite.attempt + 1 });
-      set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState: "persisting-local" } : tab) }));
       if (provider.getEntryMetadata) {
         const metadata = await provider.getEntryMetadata({ entryId: snapshot.entryId, path: snapshot.path });
         if (metadata.state === "removed") throw new WorkspaceError("not-found", `${snapshot.path} was removed.`);

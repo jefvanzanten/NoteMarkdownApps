@@ -64,11 +64,13 @@
 .resizer { position: absolute; top: 0; right: -3px; bottom: 0; z-index: 3; width: 6px; cursor: col-resize; }
 .resizer:hover { background: color-mix(in srgb, var(--color-accent) 35%, transparent); }
 
-.main { display: grid; min-width: 0; min-height: 0; flex: 1; grid-template-rows: 2.7rem minmax(0, 1fr) 1.65rem; background: var(--color-canvas); }
+.main { position: relative; display: grid; min-width: 0; min-height: 0; flex: 1; grid-template-rows: 2.7rem minmax(0, 1fr) 1.65rem; background: var(--color-canvas); }
 .documentBar { display: flex; min-width: 0; align-items: stretch; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
-.modeToggle { display: flex; flex: 0 0 auto; align-items: center; gap: 0.15rem; padding: 0.35rem 0.55rem; }
+.modeToggle { position: absolute; right: 1rem; bottom: 2.25rem; z-index: 8; display: flex; flex: 0 0 auto; align-items: center; gap: 0.15rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.35rem 0.55rem; background: var(--color-surface-raised); box-shadow: var(--shadow-soft); }
 .modeToggle button { min-height: 1.95rem; border: 0; border-radius: var(--radius-sm); padding: 0 0.75rem; color: var(--color-text-dim); background: transparent; font: 650 0.7rem var(--font-ui); cursor: pointer; }
-.modeToggle .modeActive { color: var(--color-button-text); background: var(--color-accent-strong); }
+.modeToggle button:hover { color: var(--color-text); background: var(--color-hover); }
+.modeToggle .modeActive,
+.modeToggle .modeActive:hover { color: var(--color-button-text); background: var(--color-accent-strong); }
 .documentPane { min-width: 0; min-height: 0; overflow: hidden; }
 .documentPane :global(.cm-editor) { background: var(--color-canvas); }
 .emptyState { display: grid; height: 100%; place-content: center; justify-items: center; color: var(--color-text-dim); }
@@ -98,7 +100,7 @@
   .scrim { position: absolute; inset: 0; z-index: 25; display: block; border: 0; background: rgba(5, 9, 6, 0.56); }
   .main { width: 100%; }
   .documentBar { flex-wrap: wrap; height: auto; }
-  .modeToggle { position: absolute; right: 0.35rem; bottom: 2rem; z-index: 8; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); box-shadow: var(--shadow-soft); }
+  .modeToggle { right: 0.35rem; bottom: 2rem; }
   .statusbar { padding-right: 0.5rem; }
 }
 
