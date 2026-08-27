@@ -3,6 +3,7 @@ import type { PendingDocumentWrite } from "@note/browser-storage";
 import {
   ABANDONED_IN_FLIGHT_MS,
   CURRENT_PENDING_WRITE_FORMAT,
+  LEGACY_PENDING_WRITE_FORMAT,
   MAX_PENDING_WRITE_AGE_MS,
   pendingWriteResumeDecision,
 } from "./pendingWritePolicy";
@@ -27,9 +28,10 @@ describe("pending write resume policy", () => {
     expect(pendingWriteResumeDecision(pending, now).action).toBe("process");
   });
 
-  it("blocks legacy, unsupported, and expired writes instead of blindly sending them", () => {
+  it("resumes the previous durable format but blocks unversioned, unsupported, and expired writes", () => {
+    expect(pendingWriteResumeDecision({ ...pending, formatVersion: LEGACY_PENDING_WRITE_FORMAT }, now).action).toBe("process");
     expect(pendingWriteResumeDecision({ ...pending, formatVersion: undefined }, now)).toMatchObject({ action: "block-stale", reason: "legacy-format" });
-    expect(pendingWriteResumeDecision({ ...pending, formatVersion: 2 }, now)).toMatchObject({ action: "block-stale", reason: "unsupported-format" });
+    expect(pendingWriteResumeDecision({ ...pending, formatVersion: CURRENT_PENDING_WRITE_FORMAT + 1 }, now)).toMatchObject({ action: "block-stale", reason: "unsupported-format" });
     expect(pendingWriteResumeDecision({ ...pending, createdAt: now - MAX_PENDING_WRITE_AGE_MS - 1 }, now)).toMatchObject({ action: "block-stale", reason: "expired" });
   });
 

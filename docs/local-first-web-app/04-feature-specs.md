@@ -101,7 +101,9 @@ Navigate a workspace without leaving the editor.
 - With a query, replace the tree with search results.
 - Allow folder expansion/collapse.
 - Make the sidebar collapsible and width-adjustable on desktop.
-- Present it as an accessible drawer on mobile.
+- Place a workspace switcher at the bottom left for recent workspaces, local browsing, and Drive workspace selection/creation.
+- Place a settings menu at the bottom right for global settings, diagnostics, recovery, and language; do not reserve a permanent application top bar for these actions.
+- Present the sidebar as an accessible drawer on mobile, opened from the document tab row.
 - Virtualize large trees and result sets.
 - Show `.md` files and supported image formats.
 - Hide dotfiles and common technical directories by default.

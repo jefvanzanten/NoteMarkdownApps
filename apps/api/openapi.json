@@ -6,6 +6,19 @@
   },
   "components": {
     "schemas": {
+      "ClientDiagnosticAccepted": {
+        "type": "object",
+        "properties": {
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "reportId"
+        ],
+        "additionalProperties": false
+      },
       "ApiError": {
         "type": "object",
         "properties": {
@@ -28,6 +41,248 @@
         "required": [
           "error"
         ]
+      },
+      "ClientDiagnosticReport": {
+        "type": "object",
+        "properties": {
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "workspace-error",
+              "unhandled-error",
+              "unhandled-rejection",
+              "slow-operation"
+            ]
+          },
+          "buildMode": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "pageState": {
+            "type": "object",
+            "properties": {
+              "online": {
+                "type": "boolean"
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "visible",
+                  "hidden",
+                  "prerender",
+                  "unloaded",
+                  "unknown"
+                ]
+              },
+              "providerType": {
+                "type": "string",
+                "enum": [
+                  "drive",
+                  "local",
+                  "none"
+                ]
+              },
+              "isOpening": {
+                "type": "boolean"
+              },
+              "isIndexing": {
+                "type": "boolean"
+              },
+              "entryCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tabCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "saveStates": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "required": [
+              "online",
+              "visibility",
+              "providerType",
+              "isOpening",
+              "isIndexing",
+              "entryCount",
+              "tabCount",
+              "saveStates"
+            ],
+            "additionalProperties": false
+          },
+          "failure": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "code": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "status": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 599
+              },
+              "apiCode": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "stackFrames": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "maxItems": 20
+              },
+              "causeNames": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "maxItems": 8
+              }
+            },
+            "required": [
+              "name",
+              "stackFrames",
+              "causeNames"
+            ],
+            "additionalProperties": false
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientDiagnosticEvent"
+            },
+            "maxItems": 300
+          }
+        },
+        "required": [
+          "reportId",
+          "createdAt",
+          "trigger",
+          "buildMode",
+          "pageState",
+          "failure",
+          "metrics",
+          "events"
+        ],
+        "additionalProperties": false
+      },
+      "ClientDiagnosticEvent": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "workspace-activation",
+              "reconciliation",
+              "manifest",
+              "changes",
+              "token-request",
+              "drive-request",
+              "provider-write",
+              "pending-write",
+              "leadership",
+              "document-reconciliation"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "started",
+              "queued",
+              "succeeded",
+              "failed",
+              "auth-retry",
+              "retrying",
+              "slow",
+              "skipped"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestKind": {
+            "type": "string",
+            "enum": [
+              "metadata",
+              "list",
+              "change",
+              "content",
+              "mutation"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 599
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "durationMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "retryDelayMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "requestBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "responseBytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "timestamp",
+          "operation",
+          "outcome"
+        ],
+        "additionalProperties": false
       },
       "Me": {
         "type": "object",
@@ -282,6 +537,51 @@
     "parameters": {}
   },
   "paths": {
+    "/api/v1/diagnostics/client-errors": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientDiagnosticReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Diagnostic report accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDiagnosticAccepted"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/google/start": {
       "get": {
         "parameters": [
@@ -451,6 +751,26 @@
             }
           },
           "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
             "description": "Stable API error",
             "content": {
               "application/json": {

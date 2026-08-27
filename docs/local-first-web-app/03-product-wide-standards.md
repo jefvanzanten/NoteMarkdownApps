@@ -49,9 +49,11 @@
 
 ### Application layout
 
+- The active workspace shell has no permanent application top bar; it begins with the sidebar and the tabbed Editor/Preview area.
 - Left sidebar: search field followed by file tree or active search results.
-- Desktop sidebar: collapsible and resizable.
-- Mobile sidebar: temporary drawer/overlay.
+- Desktop sidebar: collapsible and resizable, with a workspace switcher at bottom left and a settings menu at bottom right.
+- The workspace switcher provides recent workspaces, local browsing, and Drive workspace selection/creation. The settings menu provides global settings, diagnostics, recovery, and language.
+- Mobile sidebar: temporary drawer/overlay; its opener remains in the document tab row rather than a permanent top bar.
 - Main area: tabs plus one Editor/Preview pane.
 - Editor/Preview toggle remains available at the top right of the document view.
 - Do not add a permanent split view in v1.

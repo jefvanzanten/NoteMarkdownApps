@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownEditor } from "@note/editor";
+import { availableMarkdownPath, ensureMarkdownPath } from "@note/workspace-core";
 import type { OpenDocument } from "./state/workspaceStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { detectLocale, translate, type Locale } from "./i18n";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { FileTree } from "./components/FileTree";
 import { MarkdownPreview } from "./components/MarkdownPreview";
+import { ConflictDialog } from "./components/ConflictDialog";
 import { RecoveryDialog } from "./components/RecoveryDialog";
 import { RecoveryToast } from "./components/RecoveryToast";
 import { Tabs } from "./components/Tabs";
@@ -17,12 +19,14 @@ import { DiagnosticsDialog } from "./components/DiagnosticsDialog";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 import { DriveDialog } from "./components/DriveDialog";
 import { WorkspaceLoadingOverlay } from "./components/WorkspaceLoadingOverlay";
-import { useAccountStore } from "./account/accountStore";
-import { loadPreferences, putPreferences } from "./account/apiClient";
+import { SidebarControls } from "./components/SidebarControls";
+import { useDriveWorkspacesQuery, useMeQuery, usePreferencesQuery, usePutPreferencesMutation } from "./account/queries";
 import { searchDocuments, type SearchResult } from "./search/searchClient";
 import { initializeSettings, saveSettings, type AppSettings } from "./state/settings";
 import { activatePwaUpdate } from "./pwa";
 import styles from "./App.module.css";
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "notemarkdown:sidebar-collapsed";
 
 /**
  * Schedules debounced provider writes for every dirty open document.
@@ -43,7 +47,7 @@ function useAutosave(tabs: OpenDocument[], saveDocument: (path: string) => Promi
     }
     for (const tab of tabs) {
       const pending = timers.current.get(tab.path);
-      if (tab.saveState !== "dirty-local") {
+      if (tab.saveState !== "dirty-local" && tab.saveState !== "dirty-durable") {
         if (pending) window.clearTimeout(pending.timeout);
         timers.current.delete(tab.path);
         continue;
@@ -75,7 +79,8 @@ function saveStatus(document: OpenDocument, locale: Locale, isDrive: boolean): s
   if (document.editingState === "read-only") return translate(locale, "readOnlyLease");
   switch (document.saveState) {
     case "checking": return translate(locale, "checking");
-    case "dirty-local": return translate(locale, "dirty");
+    case "dirty-local": return translate(locale, "savingLocally");
+    case "dirty-durable": return translate(locale, isDrive ? "waitingForDrive" : "waitingForDisk");
     case "persisting-local": return translate(locale, isDrive ? "syncingDrive" : "saving");
     case "queued": return translate(locale, "queued");
     case "destroyed": return translate(locale, "removedExternally");
@@ -109,11 +114,13 @@ export function App() {
   const error = useWorkspaceStore((state) => state.error);
   const lastTrash = useWorkspaceStore((state) => state.lastTrash);
   const diagnostics = useWorkspaceStore((state) => state.diagnostics);
+  const conflicts = useWorkspaceStore((state) => state.conflicts);
   const recoveryItems = useWorkspaceStore((state) => state.recoveryItems);
   const isIndexing = useWorkspaceStore((state) => state.isIndexing);
   const initialize = useWorkspaceStore((state) => state.initialize);
   const resumeWorkspace = useWorkspaceStore((state) => state.resumeWorkspace);
   const openWorkspace = useWorkspaceStore((state) => state.openWorkspace);
+  const openRecentWorkspace = useWorkspaceStore((state) => state.openRecentWorkspace);
   const openDriveWorkspace = useWorkspaceStore((state) => state.openDriveWorkspace);
   const openDocument = useWorkspaceStore((state) => state.openDocument);
   const closeDocument = useWorkspaceStore((state) => state.closeDocument);
@@ -129,6 +136,7 @@ export function App() {
   const restoreLastTrash = useWorkspaceStore((state) => state.restoreLastTrash);
   const restoreRecoveryItem = useWorkspaceStore((state) => state.restoreRecoveryItem);
   const removeRecoveryItem = useWorkspaceStore((state) => state.removeRecoveryItem);
+  const resolveConflict = useWorkspaceStore((state) => state.resolveConflict);
   const insertAssets = useWorkspaceStore((state) => state.insertAssets);
   const checkExternalChanges = useWorkspaceStore((state) => state.checkExternalChanges);
   const getHistory = useWorkspaceStore((state) => state.getHistory);
@@ -140,10 +148,19 @@ export function App() {
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSidebarOpen, setSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true");
   const [sidebarWidth, setSidebarWidth] = useState(292);
-  const [dialog, setDialog] = useState<"settings" | "history" | "diagnostics" | "drive" | "recovery" | null>(null);
-  const account = useAccountStore((state) => state.me);
-  const initializeAccount = useAccountStore((state) => state.initialize);
+  const [dialog, setDialog] = useState<"settings" | "history" | "diagnostics" | "drive" | "recovery" | "conflicts" | null>(null);
+  const meQuery = useMeQuery();
+  const account = meQuery.data ?? null;
+  const preferencesQuery = usePreferencesQuery(Boolean(account));
+  const driveWorkspacesQuery = useDriveWorkspacesQuery(Boolean(account));
+  const putPreferencesMutation = usePutPreferencesMutation();
+  const metadataFailure = meQuery.error ?? preferencesQuery.error ?? driveWorkspacesQuery.error ?? putPreferencesMutation.error;
+  const [dismissedMetadataFailure, setDismissedMetadataFailure] = useState<unknown>(null);
+  const metadataError = metadataFailure && metadataFailure !== dismissedMetadataFailure
+    ? metadataFailure instanceof Error ? metadataFailure.message : "Account synchronization failed."
+    : null;
   const synchronizedUser = useRef<string | null>(null);
   const [isOnline, setOnline] = useState(navigator.onLine);
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -154,21 +171,20 @@ export function App() {
 
   useAutosave(tabs, saveDocument);
 
-  useEffect(() => { void initialize(); void initializeAccount(); }, [initialize, initializeAccount]);
+  useEffect(() => { void initialize(); }, [initialize]);
 
   useEffect(() => {
-    if (!account || synchronizedUser.current === account.user.id) return;
+    if (!account || !preferencesQuery.isFetched || preferencesQuery.isError || synchronizedUser.current === account.user.id) return;
     synchronizedUser.current = account.user.id;
-    void loadPreferences().then((serverSettings) => {
-      if (serverSettings && serverSettings.updatedAt > settings.updatedAt) {
-        const nextSettings: AppSettings = { ...serverSettings, keybindings: serverSettings.keybindings };
-        saveSettings(nextSettings);
-        setSettings(nextSettings);
-      } else {
-        void putPreferences({ ...settings, keybindings: Object.fromEntries(Object.entries(settings.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
-      }
-    });
-  }, [account, settings]);
+    const serverSettings = preferencesQuery.data;
+    if (serverSettings && serverSettings.updatedAt > settings.updatedAt) {
+      const nextSettings: AppSettings = { ...serverSettings, keybindings: serverSettings.keybindings };
+      saveSettings(nextSettings);
+      setSettings(nextSettings);
+      return;
+    }
+    putPreferencesMutation.mutate({ ...settings, keybindings: Object.fromEntries(Object.entries(settings.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
+  }, [account, preferencesQuery.data, preferencesQuery.isError, preferencesQuery.isFetched, putPreferencesMutation, settings]);
 
   useEffect(() => {
     if (!provider) return;
@@ -190,6 +206,19 @@ export function App() {
     }, 80);
     return () => window.clearTimeout(timeout);
   }, [query]);
+
+  useEffect(() => {
+    /** Flushes unresolved editor state when the browser may suspend this page. @returns Nothing after the best-effort flush starts. */
+    const flushBeforeSuspension = (): void => { void flushDurableDrafts(); };
+    /** Flushes only when the document is leaving the visible lifecycle. @returns Nothing after an optional flush starts. */
+    const flushWhenHidden = (): void => { if (document.visibilityState === "hidden") flushBeforeSuspension(); };
+    window.addEventListener("pagehide", flushBeforeSuspension);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flushBeforeSuspension);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+    };
+  }, [flushDurableDrafts]);
 
   useEffect(() => {
     let running = false;
@@ -245,7 +274,23 @@ export function App() {
     localStorage.setItem("notemarkdown:locale", nextSettings.locale);
     saveSettings(nextSettings);
     setSettings(nextSettings);
-    if (account) void putPreferences({ ...nextSettings, keybindings: Object.fromEntries(Object.entries(nextSettings.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
+    if (account) putPreferencesMutation.mutate({ ...nextSettings, keybindings: Object.fromEntries(Object.entries(nextSettings.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
+  };
+
+  /**
+   * Toggles and persists the collapsed desktop sidebar rail.
+   * @returns Nothing after the desktop preference changes.
+   */
+  const toggleDesktopSidebar = (): void => {
+    const nextCollapsed = !isSidebarCollapsed;
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(nextCollapsed));
+    setSidebarCollapsed(nextCollapsed);
+  };
+
+  /** Dismisses the current metadata failure while allowing a later failure to appear. @returns Nothing after the current failure is remembered. */
+  const dismissMetadataError = (): void => {
+    setDismissedMetadataFailure(metadataFailure);
+    putPreferencesMutation.reset();
   };
 
   /**
@@ -257,7 +302,7 @@ export function App() {
     const timestamped = { ...nextSettings, updatedAt: Date.now() };
     saveSettings(timestamped);
     setSettings(timestamped);
-    if (account) void putPreferences({ ...timestamped, keybindings: Object.fromEntries(Object.entries(timestamped.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
+    if (account) putPreferencesMutation.mutate({ ...timestamped, keybindings: Object.fromEntries(Object.entries(timestamped.keybindings).map(([id, bindings]) => [id, [...(bindings ?? [])]])) });
   };
 
   /**
@@ -288,12 +333,11 @@ export function App() {
   };
 
   /**
-   * Prompts for and creates one Markdown file.
+   * Creates and opens one collision-free Markdown note from the leading plus tab.
    * @returns Nothing after the provider operation is requested.
    */
-  const requestCreateDocument = (): void => {
-    const path = window.prompt(translate(locale, "promptNote"), "untitled.md")?.trim();
-    if (path) void createDocument(path);
+  const requestCreateDocument = (directoryPath = ""): void => {
+    void createDocument(availableMarkdownPath(entries, directoryPath));
   };
 
   /**
@@ -306,22 +350,36 @@ export function App() {
   };
 
   /**
-   * Prompts for a replacement path for the selected entry.
-   * @param messageKey Localized prompt key for rename or move intent.
+   * Prompts for a new name while keeping the entry in its current directory.
+   * @param path Entry path to rename.
    * @returns Nothing after the provider operation is requested.
    */
-  const requestMove = (messageKey: "promptRename" | "promptMove"): void => {
+  const requestRename = (path: string): void => {
+    const segments = path.split("/");
+    const currentName = segments.pop() ?? path;
+    const nextName = window.prompt(translate(locale, "promptRename"), currentName)?.trim();
+    if (!nextName || nextName === currentName || nextName.includes("/")) return;
+    const destination = [...segments, nextName].filter(Boolean).join("/");
+    void moveEntry(path, currentName.toLocaleLowerCase().endsWith(".md") ? ensureMarkdownPath(destination) : destination);
+  };
+
+  /**
+   * Prompts for a replacement path for the selected entry.
+   * @returns Nothing after the provider operation is requested.
+   */
+  const requestMove = (): void => {
     if (!selectedPath) return;
-    const destination = window.prompt(translate(locale, messageKey), selectedPath)?.trim();
+    const destination = window.prompt(translate(locale, "promptMove"), selectedPath)?.trim();
     if (destination && destination !== selectedPath) void moveEntry(selectedPath, destination);
   };
 
   /**
-   * Confirms recoverable deletion for the selected entry.
+   * Confirms recoverable deletion for one entry.
+   * @param path Entry path to delete.
    * @returns Nothing after the provider operation is requested.
    */
-  const requestTrash = (): void => {
-    if (selectedPath && window.confirm(translate(locale, "confirmTrash"))) void trashEntry(selectedPath);
+  const requestTrash = (path: string): void => {
+    if (window.confirm(translate(locale, "confirmTrash"))) void trashEntry(path);
   };
 
   if (!provider) {
@@ -332,62 +390,65 @@ export function App() {
         {dialog === "drive" ? <DriveDialog locale={locale} onOpen={(workspace) => { setDialog(null); void openDriveWorkspace(workspace); }} onClose={() => setDialog(null)} /> : null}
         {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
         {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}
+        {metadataError ? <ErrorBanner message={metadataError} locale={locale} onClose={dismissMetadataError} /> : null}
       </>
     );
   }
 
   return (
     <div className={styles.app}>
-      <header className={styles.topbar}>
-        <button type="button" className={styles.mobileMenu} onClick={() => setSidebarOpen(true)} aria-label={translate(locale, "menu")}>☰</button>
-        <div className={styles.brand}><span>N</span><strong>NoteMarkdown</strong></div>
-        <div className={styles.workspaceIdentity}>
-          <span>{translate(locale, "workspace")}</span>
-          <strong>{provider.name}</strong>
-        </div>
-        <div className={styles.topActions}>
-          <button type="button" onClick={() => void openWorkspace()}>{translate(locale, "openAnother")}</button>
-          <button type="button" onClick={() => setDialog("drive")}>Drive</button>
-          <button type="button" onClick={() => setDialog("diagnostics")}>{translate(locale, "diagnostics")} {diagnostics.length ? `(${diagnostics.length})` : ""}</button>
-          <button type="button" onClick={() => setDialog("recovery")}>{translate(locale, "recovery")} {recoveryItems.length ? `(${recoveryItems.length})` : ""}</button>
-          <button type="button" onClick={() => setDialog("settings")}>{translate(locale, "settings")}</button>
-          <button type="button" onClick={toggleLocale}>{translate(locale, "language")}</button>
-        </div>
-      </header>
-
       <div className={styles.workspace}>
         {isSidebarOpen ? <button type="button" className={styles.scrim} onClick={() => setSidebarOpen(false)} aria-label={translate(locale, "close")} /> : null}
-        <aside className={`${styles.sidebar} ${isSidebarOpen ? styles.sidebarOpen : ""}`} style={{ width: sidebarWidth }}>
+        <aside id="file-sidebar" className={`${styles.sidebar} ${isSidebarOpen ? styles.sidebarOpen : ""} ${isSidebarCollapsed ? styles.sidebarCollapsed : ""}`} style={{ width: sidebarWidth }}>
           <div className={styles.sidebarHeading}>
             <span>{translate(locale, "files")}</span>
-            <button type="button" onClick={() => setSidebarOpen(false)} aria-label={translate(locale, "collapse")}>‹</button>
+            <button type="button" className={styles.desktopCollapse} onClick={toggleDesktopSidebar} aria-controls="file-sidebar" aria-expanded={!isSidebarCollapsed} aria-label={translate(locale, isSidebarCollapsed ? "menu" : "collapse")}>{isSidebarCollapsed ? "›" : "‹"}</button>
+            <button type="button" className={styles.mobileCollapse} onClick={() => setSidebarOpen(false)} aria-controls="file-sidebar" aria-expanded={isSidebarOpen} aria-label={translate(locale, "collapse")}>‹</button>
           </div>
           <div className={styles.searchWrap}>
             <span aria-hidden="true">⌕</span>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={translate(locale, "search")} aria-label={translate(locale, "search")} />
           </div>
           <div className={styles.fileActions}>
-            <button type="button" onClick={requestCreateDocument} title={translate(locale, "newNote")}>+ md</button>
             <button type="button" onClick={requestCreateDirectory} title={translate(locale, "newFolder")}>+ dir</button>
             <button type="button" onClick={() => assetInput.current?.click()} disabled={!activeDocument} title={translate(locale, "chooseImages")}>+ img</button>
-            <button type="button" onClick={() => requestMove("promptRename")} disabled={!selectedPath} title={translate(locale, "rename")}>Aa</button>
-            <button type="button" onClick={() => requestMove("promptMove")} disabled={!selectedPath} title={translate(locale, "move")}>↗</button>
-            <button type="button" onClick={requestTrash} disabled={!selectedPath} title={translate(locale, "trash")}>×</button>
+            <button type="button" onClick={() => { if (selectedPath) requestRename(selectedPath); }} disabled={!selectedPath} title={translate(locale, "rename")}>Aa</button>
+            <button type="button" onClick={requestMove} disabled={!selectedPath} title={translate(locale, "move")}>↗</button>
+            <button type="button" onClick={() => { if (selectedPath) requestTrash(selectedPath); }} disabled={!selectedPath} title={translate(locale, "trash")}>×</button>
             <input ref={assetInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple onChange={(event) => { if (event.target.files) addImages(event.target.files); event.target.value = ""; }} />
           </div>
           <div className={styles.treeScroll}>
-            {query.trim() ? <SearchResults results={searchResults} locale={locale} onOpen={handleOpenDocument} /> : <FileTree entries={entries} query="" selectedPath={selectedPath} locale={locale} onOpenDocument={handleOpenDocument} onSelect={selectPath} />}
+            {query.trim() ? <SearchResults results={searchResults} locale={locale} onOpen={handleOpenDocument} /> : <FileTree entries={entries} query="" selectedPath={selectedPath} locale={locale} onOpenDocument={handleOpenDocument} onSelect={selectPath} onMoveEntry={(sourcePath, destinationPath) => void moveEntry(sourcePath, destinationPath)} onCreateDocument={requestCreateDocument} onRename={requestRename} onTrash={requestTrash} />}
           </div>
-          <div className={styles.sidebarFooter}><span aria-hidden="true">●</span>{isIndexing ? translate(locale, "indexing") : provider.id.startsWith("drive:") ? `Google Drive / ${isOnline ? "online" : "offline"}` : `local / ${isOnline ? "direct" : "offline"}`}</div>
+          <SidebarControls
+            locale={locale}
+            providerId={provider.id}
+            providerName={provider.name}
+            providerStatus={isIndexing ? translate(locale, "indexing") : provider.id.startsWith("drive:") ? `Google Drive / ${isOnline ? "online" : "offline"}` : `local / ${isOnline ? "direct" : "offline"}`}
+            driveWorkspaces={driveWorkspacesQuery.data ?? []}
+            diagnosticsCount={diagnostics.length}
+            recoveryCount={recoveryItems.length}
+            onOpenLocal={(workspace) => void openRecentWorkspace(workspace)}
+            onOpenDrive={(workspace) => void openDriveWorkspace(workspace)}
+            onBrowse={() => void openWorkspace()}
+            onManageDrive={() => setDialog("drive")}
+            onSettings={() => setDialog("settings")}
+            onDiagnostics={() => setDialog("diagnostics")}
+            onRecovery={() => setDialog("recovery")}
+            onToggleLocale={toggleLocale}
+          />
           <div className={styles.resizer} role="separator" aria-orientation="vertical" onPointerDown={startSidebarResize} />
         </aside>
 
         <main className={styles.main}>
           <div className={styles.documentBar}>
-            <Tabs tabs={tabs} activePath={activePath} locale={locale} onActivate={handleOpenDocument} onClose={(path) => window.setTimeout(() => closeDocument(path), 320)} />
+            <button type="button" className={styles.mobileMenu} onClick={() => setSidebarOpen(true)} aria-label={translate(locale, "menu")}>☰</button>
+            <Tabs tabs={tabs} activePath={activePath} locale={locale} onActivate={handleOpenDocument} onClose={(path) => window.setTimeout(() => closeDocument(path), 320)} onCreate={requestCreateDocument} />
             {activeDocument ? (
               <div className={styles.modeToggle} role="group" aria-label={`${translate(locale, "editor")} / ${translate(locale, "preview")}`}>
                 {activeDocument.editingState === "read-only" ? <button type="button" onClick={() => void requestEditingTakeover(activeDocument.path)}>{translate(locale, "takeOverEditing")}</button> : null}
+                {activeDocument.saveState === "conflicted" ? <button type="button" onClick={() => setDialog("conflicts")}>{translate(locale, "resolveConflicts")}</button> : null}
+                {activeDocument.saveState === "error-blocking" ? <button type="button" onClick={() => void saveDocument(activeDocument.path)}>{translate(locale, "retrySync")}</button> : null}
                 <button type="button" className={activeDocument.viewMode === "editor" ? styles.modeActive : ""} onClick={() => setViewMode(activeDocument.path, "editor")}>{translate(locale, "editor")}</button>
                 <button type="button" className={activeDocument.viewMode === "preview" ? styles.modeActive : ""} onClick={() => setViewMode(activeDocument.path, "preview")}>{translate(locale, "preview")}</button>
               </div>
@@ -439,10 +500,12 @@ export function App() {
       {dialog === "history" && activeDocument ? <HistoryDialog locale={locale} path={activeDocument.path} load={getHistory} onRestore={(entry) => void restoreHistory(entry)} onClose={() => setDialog(null)} /> : null}
       {dialog === "diagnostics" ? <DiagnosticsDialog locale={locale} diagnostics={diagnostics} onOpen={handleOpenDocument} onClose={() => setDialog(null)} /> : null}
       {dialog === "recovery" ? <RecoveryDialog locale={locale} items={recoveryItems} onRestore={(id, path) => void restoreRecoveryItem(id, path)} onDelete={(id) => void removeRecoveryItem(id)} onClose={() => setDialog(null)} /> : null}
+      {dialog === "conflicts" ? <ConflictDialog locale={locale} conflicts={conflicts} onResolve={(id, content) => void resolveConflict(id, content)} onClose={() => setDialog(null)} /> : null}
       {updateAvailable ? <UpdatePrompt locale={locale} onUpdate={() => window.setTimeout(() => void flushDurableDrafts().then(activatePwaUpdate), 320)} /> : null}
       {lastTrash ? <RecoveryToast locale={locale} onRestore={() => void restoreLastTrash()} /> : null}
       {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
       {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}
+      {metadataError ? <ErrorBanner message={metadataError} locale={locale} onClose={dismissMetadataError} /> : null}
     </div>
   );
 }

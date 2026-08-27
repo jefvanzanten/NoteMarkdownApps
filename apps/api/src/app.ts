@@ -9,11 +9,12 @@ import {
 import type { ApiConfig } from "./config.js";
 import type { ApiRepository } from "./repository.js";
 import { decryptRefreshToken, encryptRefreshToken, hashToken, pkceChallenge, randomToken } from "./security/tokens.js";
-import { exchangeGoogleCode, GOOGLE_OAUTH_SCOPES, loadGoogleIdentity, refreshGoogleAccessToken } from "./services/google.js";
+import { exchangeGoogleCode, GoogleServiceError, GOOGLE_OAUTH_SCOPES, loadGoogleIdentity, refreshGoogleAccessToken } from "./services/google.js";
 
 interface AppDependencies { config: ApiConfig; repository: ApiRepository }
-type Variables = { userId: string; sessionHash: string };
+type Variables = { userId: string; sessionHash: string; correlationId: string };
 const SESSION_COOKIE = "nm_session";
+const CORRELATION_ID_PATTERN = /^[a-zA-Z0-9._:-]{1,100}$/;
 const errorResponse = { description: "Stable API error", content: { "application/json": { schema: ApiErrorSchema } } } as const;
 /** Builds an OpenAPI JSON response declaration. @param description Response purpose. @param schema Runtime response schema. @returns OpenAPI response declaration. */
 const jsonResponse = <T extends z.ZodType>(description: string, schema: T) => ({ description, content: { "application/json": { schema } } });
@@ -44,6 +45,10 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
   const diagnosticRateLimits = new Map<string, DiagnosticRateLimit>();
   app.use("*", secureHeaders());
   app.use("/api/*", async (context, next) => {
+    const requestedCorrelationId = context.req.header("x-correlation-id");
+    const correlationId = requestedCorrelationId && CORRELATION_ID_PATTERN.test(requestedCorrelationId) ? requestedCorrelationId : crypto.randomUUID();
+    context.set("correlationId", correlationId);
+    context.header("x-correlation-id", correlationId);
     const length = Number(context.req.header("content-length") ?? 0);
     if (length > 65_536) return context.json({ error: { code: "payload-too-large", message: "API metadata payload is too large." } }, 413);
     const origin = context.req.header("origin");
@@ -124,12 +129,23 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
   const logoutRoute = createRoute({ method: "post", path: "/api/v1/session/logout", responses: { 200: jsonResponse("Logged out", EmptySchema), 401: errorResponse } });
   app.openapi(logoutRoute, async (context) => { await repository.revokeSession(context.get("sessionHash")); deleteCookie(context, SESSION_COOKIE, { path: "/", secure: config.secureCookies }); return context.json({ ok: true as const }, 200); });
 
-  const tokenRoute = createRoute({ method: "post", path: "/api/v1/drive/token", request: { body: { content: { "application/json": { schema: TokenRequestSchema } } } }, responses: { 200: jsonResponse("Short-lived browser-to-Drive token", DriveTokenSchema), 401: errorResponse, 404: errorResponse, 409: errorResponse } });
+  const tokenRoute = createRoute({ method: "post", path: "/api/v1/drive/token", request: { body: { content: { "application/json": { schema: TokenRequestSchema } } } }, responses: { 200: jsonResponse("Short-lived browser-to-Drive token", DriveTokenSchema), 401: errorResponse, 404: errorResponse, 409: errorResponse, 502: errorResponse, 503: errorResponse } });
   app.openapi(tokenRoute, async (context) => {
     const account = await repository.getConnectedAccount(context.get("userId"), context.req.valid("json").connectedAccountId);
     if (!account) return context.json({ error: { code: "not-found", message: "Connected account was not found." } }, 404);
-    try { return context.json(await refreshGoogleAccessToken(decryptRefreshToken(account.refreshTokenCiphertext, account.refreshTokenKeyVersion, config), config), 200); }
-    catch { await repository.requireReauthorization(context.get("userId"), account.id); return context.json({ error: { code: "reauthorization-required", message: "Google authorization must be renewed." } }, 409); }
+    try {
+      return context.json(await refreshGoogleAccessToken(decryptRefreshToken(account.refreshTokenCiphertext, account.refreshTokenKeyVersion, config), config), 200);
+    } catch (error) {
+      if (error instanceof GoogleServiceError && error.kind === "reauthorization-required") {
+        await repository.requireReauthorization(context.get("userId"), account.id);
+        return context.json({ error: { code: "reauthorization-required", message: "Google authorization must be renewed." } }, 409);
+      }
+      if (error instanceof GoogleServiceError && error.retryAfterMs !== undefined) context.header("retry-after", String(Math.ceil(error.retryAfterMs / 1_000)));
+      if (error instanceof GoogleServiceError && error.kind === "rate-limited") return context.json({ error: { code: "provider-rate-limited", message: "Google temporarily limited authorization requests. Try again later." } }, 503);
+      if (error instanceof GoogleServiceError && error.kind === "temporary") return context.json({ error: { code: "provider-unavailable", message: "Google authorization services are temporarily unavailable." } }, 503);
+      if (error instanceof GoogleServiceError && error.kind === "invalid-response") return context.json({ error: { code: "provider-invalid-response", message: "Google returned an invalid authorization response." } }, 502);
+      throw error;
+    }
   });
 
   const listWorkspaces = createRoute({ method: "get", path: "/api/v1/drive/workspaces", responses: { 200: jsonResponse("Linked Drive folders", WorkspaceListSchema), 401: errorResponse } });
@@ -154,7 +170,8 @@ export function createApiApp({ config, repository }: AppDependencies): OpenAPIHo
   app.get("/openapi.json", (context) => context.json(app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "NoteMarkdown metadata API", version: "1.0.0", description: "Authentication, preferences, and Drive folder references. Document content is forbidden." } })));
   app.onError((error, context) => {
     const requestId = crypto.randomUUID();
-    console.error("API request failed", { requestId, method: context.req.method, name: error.name, message: error.message });
+    const correlationId = context.get("correlationId") ?? requestId;
+    console.error("API request failed", { requestId, correlationId, method: context.req.method, name: error.name, message: error.message });
     context.header("x-request-id", requestId);
     return context.json({ error: { code: "internal", message: `The API request failed internally. Diagnostic reference: ${requestId}.` } }, 500);
   });

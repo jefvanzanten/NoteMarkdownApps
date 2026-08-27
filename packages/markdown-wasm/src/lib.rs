@@ -1,8 +1,6 @@
 #![cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 
-use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html::push_html,
-};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html::push_html};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -52,7 +50,10 @@ fn heading_slug(text: &str, used: &mut HashMap<String, usize>) -> String {
         if character.is_alphanumeric() || character == '_' {
             slug.push(character);
             previous_dash = false;
-        } else if (character.is_whitespace() || character == '-') && !previous_dash && !slug.is_empty() {
+        } else if (character.is_whitespace() || character == '-')
+            && !previous_dash
+            && !slug.is_empty()
+        {
             slug.push('-');
             previous_dash = true;
         }
@@ -316,7 +317,8 @@ mod tests {
     /// Verifies enabled GFM features and heading anchors.
     #[test]
     fn renders_gfm_and_heading_anchors() {
-        let result = render_markdown("# Hello world\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n- [x] Done");
+        let result =
+            render_markdown("# Hello world\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n- [x] Done");
         assert!(result.html.contains("id=\"hello-world\""));
         assert!(result.html.contains("<table>"));
         assert!(result.html.contains("type=\"checkbox\""));

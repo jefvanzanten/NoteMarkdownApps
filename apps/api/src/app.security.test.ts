@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApiApp } from "./app.js";
 import type { ApiConfig } from "./config.js";
 import type { ApiRepository } from "./repository.js";
+import { encryptRefreshToken } from "./security/tokens.js";
 
-const config = { publicOrigin: "https://notes.example", publicBaseUrl: "https://notes.example/notes", googleClientId: "client", secureCookies: true, syncDiagnosticsEnabled: true } as ApiConfig;
+const config = { publicOrigin: "https://notes.example", publicBaseUrl: "https://notes.example/notes", googleClientId: "client", googleClientSecret: "secret", secureCookies: true, syncDiagnosticsEnabled: true, tokenEncryptionKeys: new Map([[1, Buffer.alloc(32, 7)]]), currentKeyVersion: 1 } as ApiConfig;
+
+afterEach(() => vi.unstubAllGlobals());
 
 /** Creates an API with an isolated repository double. @param overrides Repository methods under test. @returns Hono API. */
 function testApp(overrides: Partial<ApiRepository>) { return createApiApp({ config, repository: { findSessionUser: async () => "11111111-1111-4111-8111-111111111111", ...overrides } as ApiRepository }); }
@@ -31,6 +34,20 @@ describe("API security boundaries", () => {
     const response = await app.request("/api/v1/drive/workspaces", { headers: { cookie: "nm_session=valid" } });
     expect(response.status).toBe(200);
     expect(listDriveWorkspaces).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("does not revoke a Google grant during a temporary provider outage", async () => {
+    const encrypted = encryptRefreshToken("refresh-token", config);
+    const requireReauthorization = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "server_error" }), { status: 503 })));
+    const app = testApp({
+      getConnectedAccount: async () => ({ id: "22222222-2222-4222-8222-222222222222", refreshTokenCiphertext: encrypted.ciphertext, refreshTokenKeyVersion: encrypted.keyVersion }) as never,
+      requireReauthorization,
+    } as Partial<ApiRepository>);
+    const response = await app.request("/api/v1/drive/token", { method: "POST", headers: { cookie: "nm_session=valid", origin: config.publicOrigin, "content-type": "application/json" }, body: JSON.stringify({ connectedAccountId: "22222222-2222-4222-8222-222222222222" }) });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: { code: "provider-unavailable", message: "Google authorization services are temporarily unavailable." } });
+    expect(requireReauthorization).not.toHaveBeenCalled();
   });
 
   it("accepts a bounded content-free client report even after its session expired", async () => {
@@ -81,16 +98,18 @@ describe("API security boundaries", () => {
 
   it("correlates an internal response with a reason-bearing server log without exposing the reason", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const correlationId = "client-operation-123";
     const app = testApp({ listDriveWorkspaces: async () => { throw new Error("database diagnostic detail"); } } as Partial<ApiRepository>);
-    const response = await app.request("/api/v1/drive/workspaces", { headers: { cookie: "nm_session=valid" } });
+    const response = await app.request("/api/v1/drive/workspaces", { headers: { cookie: "nm_session=valid", "x-correlation-id": correlationId } });
     const body = await response.json() as { error: { code: string; message: string } };
     const requestId = response.headers.get("x-request-id");
 
     expect(response.status).toBe(500);
     expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.headers.get("x-correlation-id")).toBe(correlationId);
     expect(body.error).toEqual({ code: "internal", message: `The API request failed internally. Diagnostic reference: ${requestId}.` });
     expect(body.error.message).not.toContain("database diagnostic detail");
-    expect(consoleError).toHaveBeenCalledWith("API request failed", expect.objectContaining({ requestId, message: "database diagnostic detail" }));
+    expect(consoleError).toHaveBeenCalledWith("API request failed", expect.objectContaining({ requestId, correlationId, message: "database diagnostic detail" }));
     consoleError.mockRestore();
   });
 });

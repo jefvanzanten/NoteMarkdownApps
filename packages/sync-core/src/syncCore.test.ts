@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkspaceChanges } from "./changes";
+import { applyWorkspaceChanges, compareWorkspaceManifests } from "./changes";
 import { decideReconciliation } from "./reconciliation";
 import { PriorityScheduler } from "./scheduler";
 
@@ -28,6 +28,14 @@ describe("PriorityScheduler", () => {
 describe("Drive change application", () => {
   const directory = { workspaceId: "drive:w", entryId: "folder", path: "old", kind: "directory" as const, state: "live" as const, updatedAt: 1 };
   const document = { workspaceId: "drive:w", entryId: "file", path: "old/note.md", kind: "document" as const, parentEntryId: "folder", observedProviderRevision: { id: "R1", modifiedAt: 1, size: 1 }, state: "live" as const, updatedAt: 1 };
+
+  it("compares authoritative revisions, removals, and stable-ID moves", () => {
+    const moved = { ...document, path: "new/note.md", observedProviderRevision: { ...document.observedProviderRevision, id: "R2" } };
+    const result = compareWorkspaceManifests([directory, document], [moved]);
+    expect(result.changedEntryIds).toEqual(new Set(["file"]));
+    expect(result.removedPaths).toEqual(new Set(["old"]));
+    expect(result.moves).toEqual([{ entryId: "file", previousPath: "old/note.md", nextPath: "new/note.md" }]);
+  });
 
   it("propagates a stable folder move to descendants", () => {
     const result = applyWorkspaceChanges([directory, document], [{ entryId: "folder", removed: false, metadata: { entryId: "folder", path: "new", kind: "directory", state: "live" } }], "drive:w", 2);

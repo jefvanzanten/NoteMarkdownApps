@@ -1,4 +1,4 @@
-import { WorkspaceError } from "@note/workspace-core";
+import { classifyWorkspaceError, WorkspaceError, type WorkspaceFailure } from "@note/workspace-core";
 import { CancelledWorkError, retryDelay } from "@note/sync-core";
 import { ApiRequestError } from "../account/apiClient";
 
@@ -19,9 +19,19 @@ export function driveTokenFailure(error: unknown): WorkspaceError {
     if (error.status === 409 || error.code === "reauthorization-required") {
       return new WorkspaceError("permission", `Google Drive authorization must be renewed. Reconnect Google Drive before retrying; your draft remains stored locally.${reference}`, { cause: error });
     }
-    return new WorkspaceError("temporary", `The NoteMarkdown API could not refresh Google Drive access (HTTP ${error.status}, ${error.code}). Local changes remain stored and provider work will retry.${reference}`, { cause: error });
+    return new WorkspaceError("temporary", `The NoteMarkdown API could not refresh Google Drive access (HTTP ${error.status}, ${error.code}). Local changes remain stored and provider work will retry.${reference}`, { cause: error, retryAfterMs: error.retryAfterMs });
   }
   return new WorkspaceError("temporary", "The NoteMarkdown API could not refresh Google Drive access. Local changes remain stored and provider work will retry.", { cause: error });
+}
+
+/** Returns machine-readable recovery policy for a Drive token failure. */
+export function classifyDriveTokenFailure(error: unknown): WorkspaceFailure {
+  const failure = driveTokenFailure(error);
+  if (error instanceof ApiRequestError && error.status === 401) return classifyWorkspaceError(failure, "metadata-api", { category: "session-expired", blocks: "account", recoveryAction: "sign-in", requestId: error.requestId });
+  if (error instanceof ApiRequestError && (error.status === 404 || error.code === "not-found")) return classifyWorkspaceError(failure, "metadata-api", { category: "reauthorization-required", blocks: "account", recoveryAction: "reconnect", requestId: error.requestId });
+  if (error instanceof ApiRequestError && (error.status === 409 || error.code === "reauthorization-required")) return classifyWorkspaceError(failure, "metadata-api", { category: "reauthorization-required", blocks: "account", recoveryAction: "reconnect", requestId: error.requestId });
+  if (error instanceof ApiRequestError && error.code === "provider-rate-limited") return classifyWorkspaceError(failure, "metadata-api", { category: "rate-limited", requestId: error.requestId });
+  return classifyWorkspaceError(failure, error instanceof ApiRequestError ? "metadata-api" : "google-drive", { ...(error instanceof ApiRequestError ? { requestId: error.requestId } : {}) });
 }
 
 /**
@@ -33,10 +43,7 @@ export function driveTokenFailure(error: unknown): WorkspaceError {
 export function providerWriteRetryDelay(error: unknown, attempt: number): number | null {
   if (error instanceof CancelledWorkError) return retryDelay(attempt);
   if (!(error instanceof WorkspaceError)) return null;
-  if (error.code === "permission") {
-    const cause = (error as Error & { cause?: unknown }).cause;
-    return cause instanceof ApiRequestError && cause.status === 401 ? retryDelay(attempt) : null;
-  }
+  if (error.code === "permission") return null;
   if (error.code !== "offline" && error.code !== "quota" && error.code !== "temporary") return null;
   return retryDelay(attempt, { retryAfterMs: error.retryAfterMs });
 }

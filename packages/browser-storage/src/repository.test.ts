@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitCachedDocument,
+  commitDocumentAndAcknowledgeWrite,
   commitWorkspaceChangePage,
   importLegacyDriveMirror,
   loadCachedDocument,
@@ -13,6 +14,7 @@ import {
   lockDriveRepositories,
   migrateLegacyWorkspace,
   openDatabase,
+  PENDING_WRITE_FORMAT_VERSION,
   registerRepositoryWorkspace,
   savePendingWrite,
   saveRepositoryDraft,
@@ -123,10 +125,24 @@ describe("central browser repository", () => {
     expect((await loadRepositoryDraft("local:delta", "stable"))?.path).toBe("new.md");
     const pendingWrite = (await loadPendingWrites("local:delta"))[0];
     expect(pendingWrite.targetPath).toBe("new.md");
-    expect(pendingWrite).toMatchObject({ formatVersion: 1 });
+    expect(pendingWrite).toMatchObject({ formatVersion: PENDING_WRITE_FORMAT_VERSION });
     expect(pendingWrite.createdAt).toEqual(expect.any(Number));
     expect(pendingWrite.updatedAt).toEqual(expect.any(Number));
     expect((await loadRepositorySession("local:delta"))?.tabs[0].path).toBe("new.md");
+  });
+
+  it("does not acknowledge a newer pending revision when an older provider write completes", async () => {
+    await registerRepositoryWorkspace({ id: "local:conditional", name: "Conditional", providerType: "local", lastOpenedAt: 1 });
+    const oldPending = { id: "document:stable", workspaceId: "local:conditional", entryId: "stable", targetPath: "note.md", expectedBaseRevision: revision, draftRevision: "old", content: "old", format: { hasBom: false, lineEnding: "\n" as const }, state: "in-flight" as const, attempt: 0, formatVersion: PENDING_WRITE_FORMAT_VERSION };
+    const newPending = { ...oldPending, draftRevision: "new", content: "new", state: "pending" as const };
+    await savePendingWrite(oldPending);
+    await savePendingWrite(newPending);
+
+    const acknowledged = await commitDocumentAndAcknowledgeWrite({ workspaceId: "local:conditional", entryId: "stable", path: "note.md", content: "old", format: oldPending.format, cachedContentRevision: { id: "R2", modifiedAt: 2, size: 3 }, lastAccessedAt: 2 }, oldPending);
+
+    expect(acknowledged).toBe(false);
+    expect((await loadCachedDocument("local:conditional", "stable"))?.content).toBe("old");
+    expect((await loadPendingWrites("local:conditional"))[0]).toMatchObject({ draftRevision: "new", content: "new", state: "pending" });
   });
 
   it("encrypts Drive paths and content and remains locked after key removal", async () => {

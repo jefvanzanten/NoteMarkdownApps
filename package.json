@@ -7,6 +7,7 @@
     "test": "pnpm --filter @note/editor test && pnpm --filter @note/workspace-core test && pnpm --filter @note/workspace-local test && pnpm --filter @note/workspace-drive test && pnpm --filter @note/browser-storage test && pnpm --filter @note/sync-core test && pnpm --filter @note/api-contracts test && pnpm --filter @note/api test && pnpm --filter @note/markdown-wasm test && pnpm --filter @note/web-app test",
     "test:e2e:drive": "playwright test --config e2e/playwright.config.ts",
     "test:e2e:drive:auth": "playwright test --config e2e/playwright.auth.config.ts",
+    "test:e2e:drive:visual": "playwright test --config e2e/playwright.visual.config.ts",
     "dev:tray": "pnpm --filter @note/web-tray-app dev",
     "dev:demo": "pnpm --filter demo dev",
     "dev:web": "pnpm --filter @note/web-app dev --host",

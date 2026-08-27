@@ -54,6 +54,7 @@ export interface CachedDocument {
 }
 
 export interface RepositoryDraft {
+  localRevision?: string;
   workspaceId: string;
   entryId: string;
   path: string;
@@ -69,7 +70,7 @@ export interface RepositoryHistoryEntry extends RepositoryDraft {
   reason: "autosave" | "provider-save" | "external-change" | "restore";
 }
 
-export const PENDING_WRITE_FORMAT_VERSION = 1;
+export const PENDING_WRITE_FORMAT_VERSION = 2;
 
 export interface PendingDocumentWrite {
   id: string;
@@ -78,6 +79,8 @@ export interface PendingDocumentWrite {
   targetPath: string;
   expectedBaseRevision: WorkspaceRevision;
   draftRevision: string;
+  content?: string;
+  format?: DocumentFormat;
   state: "pending" | "in-flight" | "retryable" | "conflicted" | "blocked" | "applied";
   attempt: number;
   retryAt?: number;
@@ -151,6 +154,7 @@ interface ProtectedRecord {
   nonce?: ArrayBuffer;
   ciphertext?: ArrayBuffer;
   payload?: unknown;
+  operationRevision?: string;
 }
 
 interface MigrationState {
@@ -234,10 +238,19 @@ export async function loadRepositoryWorkspace(workspaceId: string): Promise<Repo
  * @returns Last workspace envelope or null.
  */
 export async function loadLastRepositoryWorkspace(): Promise<RepositoryWorkspaceReference | null> {
+  const workspaces = await loadRepositoryWorkspaces();
+  return workspaces[0] ?? null;
+}
+
+/**
+ * Loads registered workspace envelopes in most-recently-used order.
+ * @returns Workspace references sorted by last-opened time.
+ */
+export async function loadRepositoryWorkspaces(): Promise<RepositoryWorkspaceReference[]> {
   const database = await openDatabase();
   try {
     const records = await result(database.transaction("repositoryWorkspaces").objectStore("repositoryWorkspaces").getAll()) as RepositoryWorkspaceReference[];
-    return records.sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)[0] ?? null;
+    return records.sort((left, right) => right.lastOpenedAt - left.lastOpenedAt);
   } finally {
     database.close();
   }
@@ -295,6 +308,20 @@ async function accountKey(connectedAccountId: string, create: boolean): Promise<
   return key;
 }
 
+/** Returns a privacy-safe operation revision used for conditional pending-write acknowledgement. @param storeName Destination store. @param payload Protected payload. @returns Random local revision or undefined. */
+function publicOperationRevision<T>(storeName: string, payload: T): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  if (storeName === "pendingWrites" && "draftRevision" in payload) {
+    const revision = (payload as { draftRevision?: unknown }).draftRevision;
+    return typeof revision === "string" ? revision : undefined;
+  }
+  if (storeName === "repositoryDrafts" && "localRevision" in payload) {
+    const revision = (payload as { localRevision?: unknown }).localRevision;
+    return typeof revision === "string" ? revision : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Encodes local data plainly or Drive data as authenticated ciphertext.
  * @param envelope Workspace protection envelope.
@@ -309,7 +336,8 @@ async function protect<T>(
   recordKey: string,
   payload: T,
 ): Promise<ProtectedRecord> {
-  if (envelope.providerType === "local") return { workspaceId: envelope.id, recordKey, encrypted: false, payload };
+  const operationRevision = publicOperationRevision(storeName, payload);
+  if (envelope.providerType === "local") return { workspaceId: envelope.id, recordKey, encrypted: false, payload, operationRevision };
   if (!envelope.connectedAccountId) throw new Error("Drive repository encryption account is unavailable.");
   const key = await accountKey(envelope.connectedAccountId, true);
   if (!key) throw new Error("Drive repository is locked.");
@@ -320,7 +348,7 @@ async function protect<T>(
     key,
     new TextEncoder().encode(JSON.stringify(payload)),
   );
-  return { workspaceId: envelope.id, recordKey, encrypted: true, nonce: nonce.buffer as ArrayBuffer, ciphertext };
+  return { workspaceId: envelope.id, recordKey, encrypted: true, nonce: nonce.buffer as ArrayBuffer, ciphertext, operationRevision };
 }
 
 /**
@@ -571,10 +599,12 @@ export async function loadCachedDocuments(workspaceId: string): Promise<CachedDo
 /**
  * Persists an encrypted or permission-gated repository draft.
  * @param draft Durable editor buffer.
- * @returns Nothing after local durability.
+ * @returns The durable draft with a collision-safe local revision identity.
  */
-export async function saveRepositoryDraft(draft: RepositoryDraft): Promise<void> {
-  await putProtected("repositoryDrafts", draft.workspaceId, draft.entryId, draft);
+export async function saveRepositoryDraft(draft: RepositoryDraft): Promise<RepositoryDraft> {
+  const versionedDraft = { ...draft, localRevision: draft.localRevision ?? crypto.randomUUID() };
+  await putProtected("repositoryDrafts", versionedDraft.workspaceId, versionedDraft.entryId, versionedDraft);
+  return versionedDraft;
 }
 
 /**
@@ -676,15 +706,47 @@ export async function updatePendingWrite(pendingWrite: PendingDocumentWrite): Pr
 }
 
 /**
+ * Updates a pending attempt only when no newer local revision replaced it.
+ * @param pendingWrite Updated state for the claimed attempt.
+ * @returns Whether the exact attempt remained current and was updated.
+ */
+export async function updatePendingWriteIfCurrent(pendingWrite: PendingDocumentWrite): Promise<boolean> {
+  const envelope = await loadRepositoryWorkspace(pendingWrite.workspaceId);
+  if (!envelope) throw new Error("Repository workspace is unavailable.");
+  const pendingKey = await opaqueKey(envelope.salt, pendingWrite.id);
+  const nextRecord = await protect(envelope, "pendingWrites", pendingKey, { ...pendingWrite, updatedAt: Date.now() });
+  const database = await openDatabase();
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      const transaction = database.transaction("pendingWrites", "readwrite");
+      const store = transaction.objectStore("pendingWrites");
+      const currentRequest = store.get([pendingWrite.workspaceId, pendingKey]);
+      let updated = false;
+      currentRequest.onsuccess = () => {
+        const current = currentRequest.result as ProtectedRecord | undefined;
+        updated = current?.operationRevision === pendingWrite.draftRevision
+          || (current?.operationRevision === undefined && pendingWrite.formatVersion === 1);
+        if (updated) store.put(nextRecord);
+      };
+      currentRequest.onerror = () => reject(currentRequest.error ?? new Error("Pending write state could not be checked."));
+      transaction.oncomplete = () => resolve(updated);
+      transaction.onerror = () => reject(transaction.error ?? new Error("Pending write state update failed."));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * Atomically commits provider-confirmed content and marks its pending write applied.
  * @param document Cached provider-confirmed document.
  * @param pendingWrite Matching pending write.
- * @returns Nothing after both protected records commit.
+ * @returns Whether the exact attempt was acknowledged; false means a newer pending revision superseded it.
  */
 export async function commitDocumentAndAcknowledgeWrite(
   document: CachedDocument,
   pendingWrite: PendingDocumentWrite,
-): Promise<void> {
+): Promise<boolean> {
   const envelope = await loadRepositoryWorkspace(document.workspaceId);
   if (!envelope) throw new Error("Repository workspace is unavailable.");
   const documentKey = await opaqueKey(envelope.salt, document.entryId);
@@ -693,10 +755,22 @@ export async function commitDocumentAndAcknowledgeWrite(
   const appliedRecord = await protect(envelope, "pendingWrites", pendingKey, { ...pendingWrite, state: "applied", updatedAt: Date.now() });
   const database = await openDatabase();
   try {
-    const transaction = database.transaction(["cachedDocuments", "pendingWrites"], "readwrite");
-    transaction.objectStore("cachedDocuments").put(documentRecord);
-    transaction.objectStore("pendingWrites").put(appliedRecord);
-    await completed(transaction);
+    return await new Promise<boolean>((resolve, reject) => {
+      const transaction = database.transaction(["cachedDocuments", "pendingWrites"], "readwrite");
+      const pendingStore = transaction.objectStore("pendingWrites");
+      const currentRequest = pendingStore.get([document.workspaceId, pendingKey]);
+      let acknowledged = false;
+      currentRequest.onsuccess = () => {
+        const current = currentRequest.result as ProtectedRecord | undefined;
+        acknowledged = current?.operationRevision === pendingWrite.draftRevision
+          || (current?.operationRevision === undefined && pendingWrite.formatVersion === 1);
+        transaction.objectStore("cachedDocuments").put(documentRecord);
+        if (acknowledged) pendingStore.put(appliedRecord);
+      };
+      currentRequest.onerror = () => reject(currentRequest.error ?? new Error("Pending write acknowledgement could not be checked."));
+      transaction.oncomplete = () => resolve(acknowledged);
+      transaction.onerror = () => reject(transaction.error ?? new Error("Provider write acknowledgement failed."));
+    });
   } finally {
     database.close();
   }
@@ -718,6 +792,16 @@ export async function saveConflict(conflict: DocumentConflict): Promise<void> {
  */
 export async function loadConflicts(workspaceId: string): Promise<DocumentConflict[]> {
   return getAllProtected("conflicts", workspaceId);
+}
+
+/** Removes one resolved conflict. @param workspaceId Workspace identity. @param id Conflict identity. @returns Nothing after deletion. */
+export async function deleteConflict(workspaceId: string, id: string): Promise<void> {
+  await deleteProtected("conflicts", workspaceId, id);
+}
+
+/** Removes one resolved or superseded pending write. @param workspaceId Workspace identity. @param id Pending-write identity. @returns Nothing after deletion. */
+export async function deletePendingWrite(workspaceId: string, id: string): Promise<void> {
+  await deleteProtected("pendingWrites", workspaceId, id);
 }
 
 /**

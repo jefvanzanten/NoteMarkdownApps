@@ -3,6 +3,7 @@
 import {
   WorkspaceError,
   classifyWorkspaceEntry,
+  ensureMarkdownPath,
   joinWorkspacePath,
   normalizeWorkspacePath,
   workspaceDirname,
@@ -333,7 +334,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
    * @returns The new document snapshot.
    */
   async createDocument(path: string, content = ""): Promise<WorkspaceDocument> {
-    const normalizedPath = normalizeWorkspacePath(path.toLowerCase().endsWith(".md") ? path : `${path}.md`);
+    const normalizedPath = ensureMarkdownPath(path);
     try {
       const parent = await this.getDirectoryHandle(workspaceDirname(normalizedPath), false);
       const name = normalizedPath.split("/").at(-1) ?? normalizedPath;

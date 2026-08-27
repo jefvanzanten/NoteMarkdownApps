@@ -57,6 +57,20 @@ Each successful run attaches `drive-sync-metrics.json` with:
 
 Playwright HTML output is written to `playwright-report/`; traces, screenshots, video, and attachments go to `test-results/e2e/`. These directories and authentication state are ignored by Git. Delete failed-run traces after diagnosis because browser snapshots may contain synthetic test content. Current anonymized baseline evidence is recorded in [`docs/local-first-web-app/08-drive-sync-qualification.md`](../docs/local-first-web-app/08-drive-sync-qualification.md).
 
+## 3. Record the workspace-opening flow as screenshots
+
+After saving the authenticated session, record the read-only journey from a blank browser to a loaded linked Drive workspace:
+
+```bash
+E2E_BASE_URL=http://localhost:5173/ \
+PLAYWRIGHT_EXECUTABLE_PATH=/usr/bin/google-chrome \
+pnpm test:e2e:drive:visual
+```
+
+The recorder opens the first linked workspace. Set `E2E_DRIVE_WORKSPACE` to require one exact workspace when the account has multiple linked folders. It samples at approximately 5 frames per second by default and discards consecutive screenshots with identical pixels. Set `E2E_VISUAL_FRAME_INTERVAL_MS=500` for 2 frames per second, for example. The numbered JPEG files and `manifest.json` are written below `test-results/e2e-visual/` in the test's `drive-visual-flow/` artifact directory. The manifest records each frame's elapsed time and flow phase.
+
+Use `E2E_HEADED=true` to watch the journey. This flow does not edit Drive files, but its screenshots can contain the signed-in account identity, workspace name, and file names. Review them before sharing with another agent.
+
 ## Safety behavior
 
 - The test refuses to run without `E2E_REAL_DRIVE=true` and an exact mutation acknowledgement.

@@ -1,5 +1,6 @@
 import {
   WorkspaceError,
+  ensureMarkdownPath,
   supportedImageExtensions,
   type DocumentFormat,
   type TrashResult,
@@ -141,6 +142,13 @@ function responseBodyBytes(response: Response): number | undefined {
   if (header === null) return undefined;
   const value = Number(header);
   return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Performs one bounded Drive fetch while preserving caller cancellation. */
+function fetchDrive(url: string, init: RequestInit, kind: DriveRequestKind): Promise<Response> {
+  const timeout = AbortSignal.timeout(kind === "content" || kind === "mutation" ? 60_000 : 30_000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  return fetch(url, { ...init, signal });
 }
 
 /**
@@ -418,23 +426,24 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
     let response: Response;
     try {
       let accessToken = await this.options.tokenProvider.getAccessToken();
-      response = await fetch(url, {
+      response = await fetchDrive(url, {
         ...init,
         headers: { authorization: `Bearer ${accessToken}`, ...init.headers },
-      });
+      }, kind);
       if (response.status === 401 && this.options.tokenProvider.invalidateAccessToken) {
         this.options.diagnostics?.recordRequestResult?.({ kind, operationId, outcome: "auth-retry", status: 401, durationMs: Date.now() - startedAt, errorCode: "permission", requestBytes: sentBytes, responseBytes: responseBodyBytes(response) });
         this.options.tokenProvider.invalidateAccessToken();
         accessToken = await this.options.tokenProvider.getAccessToken();
-        response = await fetch(url, {
+        response = await fetchDrive(url, {
           ...init,
           headers: { authorization: `Bearer ${accessToken}`, ...init.headers },
-        });
+        }, kind);
       }
     } catch (error) {
+      const timedOut = error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
       const providerError = error instanceof WorkspaceError
         ? error
-        : new WorkspaceError(navigator.onLine ? "temporary" : "offline", "Google Drive could not be reached.", { cause: error });
+        : new WorkspaceError(navigator.onLine ? "temporary" : "offline", timedOut ? "Google Drive request timed out." : "Google Drive could not be reached.", { cause: error });
       this.options.diagnostics?.recordRequestResult?.({ kind, operationId, outcome: "failed", durationMs: Date.now() - startedAt, errorCode: providerError.code, requestBytes: sentBytes });
       throw providerError;
     }
@@ -845,10 +854,11 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
    * @returns Created document.
    */
   async createDocument(path: string, content = ""): Promise<WorkspaceDocument> {
-    if (this.filesByPath.has(path) || this.collisions.has(path)) throw new WorkspaceError("collision", `${path} already exists.`);
+    const normalizedPath = ensureMarkdownPath(path);
+    if (this.filesByPath.has(normalizedPath) || this.collisions.has(normalizedPath)) throw new WorkspaceError("collision", `${normalizedPath} already exists.`);
     const format: DocumentFormat = { hasBom: false, lineEnding: "\n" };
-    const file = await this.createFile(path, encodeDocument(content, format), "text/markdown");
-    const document = { path, content, format, revision: revision(file), entryId: file.id, metadataFingerprint: metadataFingerprint(file) };
+    const file = await this.createFile(normalizedPath, encodeDocument(content, format), "text/markdown");
+    const document = { path: normalizedPath, content, format, revision: revision(file), entryId: file.id, metadataFingerprint: metadataFingerprint(file) };
     await this.options.mirror?.saveDocument(document);
     return document;
   }

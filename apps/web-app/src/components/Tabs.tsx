@@ -9,6 +9,7 @@ interface TabsProps {
   locale: Locale;
   onActivate: (path: string) => void;
   onClose: (path: string) => void;
+  onCreate: () => void;
 }
 
 /**
@@ -25,9 +26,18 @@ function basename(path: string): string {
  * @param props Open tabs, active identity, locale, and tab callbacks.
  * @returns Accessible document tab strip.
  */
-export function Tabs({ tabs, activePath, locale, onActivate, onClose }: TabsProps) {
+export function Tabs({ tabs, activePath, locale, onActivate, onClose, onCreate }: TabsProps) {
   return (
     <div className={styles.tabs} role="tablist" aria-label={translate(locale, "files")}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected="false"
+        className={styles.createTab}
+        onClick={onCreate}
+        title={translate(locale, "newNote")}
+        aria-label={translate(locale, "newNote")}
+      >+</button>
       {tabs.map((tab) => (
         <div key={tab.path} className={`${styles.tabGroup} ${tab.path === activePath ? styles.active : ""}`}>
           <button

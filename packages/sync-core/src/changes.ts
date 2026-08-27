@@ -32,6 +32,34 @@ export interface AppliedWorkspaceChanges {
   moves: ManifestPathMove[];
 }
 
+export interface ComparedWorkspaceManifests {
+  changedEntryIds: Set<string>;
+  removedPaths: Set<string>;
+  moves: ManifestPathMove[];
+}
+
+/** Compares two authoritative flat manifests without provider or UI dependencies. */
+export function compareWorkspaceManifests(
+  previousEntries: readonly DeltaManifestEntry[],
+  nextEntries: readonly DeltaManifestEntry[],
+): ComparedWorkspaceManifests {
+  const previousById = new Map(previousEntries.map((entry) => [entry.entryId, entry]));
+  const nextIds = new Set(nextEntries.map((entry) => entry.entryId));
+  const changedEntryIds = new Set<string>();
+  const removedPaths = new Set<string>();
+  const moves: ManifestPathMove[] = [];
+  for (const entry of nextEntries) {
+    const existing = previousById.get(entry.entryId);
+    if (!existing
+      || existing.observedProviderRevision?.id !== entry.observedProviderRevision?.id
+      || existing.metadataFingerprint?.id !== entry.metadataFingerprint?.id
+      || existing.state !== entry.state) changedEntryIds.add(entry.entryId);
+    if (existing && existing.path !== entry.path) moves.push({ entryId: entry.entryId, previousPath: existing.path, nextPath: entry.path });
+  }
+  for (const entry of previousEntries) if (!nextIds.has(entry.entryId)) removedPaths.add(entry.path);
+  return { changedEntryIds, removedPaths, moves };
+}
+
 /**
  * Rewrites one path when a stable parent directory moves.
  * @param path Existing workspace-relative path.

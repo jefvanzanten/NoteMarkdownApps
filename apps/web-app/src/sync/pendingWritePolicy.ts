@@ -1,6 +1,7 @@
 import { PENDING_WRITE_FORMAT_VERSION, type PendingDocumentWrite } from "@note/browser-storage";
 
 export const CURRENT_PENDING_WRITE_FORMAT = PENDING_WRITE_FORMAT_VERSION;
+export const LEGACY_PENDING_WRITE_FORMAT = 1;
 export const MAX_PENDING_WRITE_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const ABANDONED_IN_FLIGHT_MS = 2 * 60 * 1_000;
 
@@ -18,7 +19,7 @@ export type PendingWriteResumeDecision =
 export function pendingWriteResumeDecision(pending: PendingDocumentWrite, now = Date.now()): PendingWriteResumeDecision {
   if (pending.state === "applied" || pending.state === "blocked" || pending.state === "conflicted") return { action: "skip", pending };
   if (pending.formatVersion === undefined || pending.createdAt === undefined) return { action: "block-stale", pending, reason: "legacy-format" };
-  if (pending.formatVersion !== CURRENT_PENDING_WRITE_FORMAT) return { action: "block-stale", pending, reason: "unsupported-format" };
+  if (pending.formatVersion !== CURRENT_PENDING_WRITE_FORMAT && pending.formatVersion !== LEGACY_PENDING_WRITE_FORMAT) return { action: "block-stale", pending, reason: "unsupported-format" };
   if (now - pending.createdAt > MAX_PENDING_WRITE_AGE_MS) return { action: "block-stale", pending, reason: "expired" };
   if (pending.state === "in-flight") {
     const lastAttemptAt = pending.updatedAt ?? pending.createdAt;
