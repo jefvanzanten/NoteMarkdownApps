@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm --filter @note/markdown-wasm build && tsc --noEmit && vite build",
+    "build": "pnpm --filter @note/api-contracts build && pnpm --filter @note/markdown-wasm build && tsc --noEmit && vite build",
     "build:web": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
