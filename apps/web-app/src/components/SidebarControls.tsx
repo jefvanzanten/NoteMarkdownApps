@@ -7,8 +7,7 @@ import styles from "./SidebarControls.module.css";
 interface SidebarControlsProps {
   locale: Locale;
   providerId: string;
-  providerName: string;
-  providerStatus: string;
+  workspaceName: string;
   driveWorkspaces: DriveWorkspaceReference[];
   diagnosticsCount: number;
   recoveryCount: number;
@@ -32,6 +31,7 @@ export function SidebarControls(props: SidebarControlsProps) {
   const settingsMenu = useRef<HTMLDetailsElement>(null);
   const [localWorkspaces, setLocalWorkspaces] = useState<RepositoryWorkspaceReference[]>([]);
   const [isLoading, setLoading] = useState(false);
+  const workspaceLabel = `${props.workspaceName} (${props.providerId.startsWith("drive:") ? "Google Drive" : "Local"})`;
 
   /** Closes both footer menus after an action is selected. @returns Nothing. */
   const closeMenus = (): void => {
@@ -70,9 +70,9 @@ export function SidebarControls(props: SidebarControlsProps) {
   return (
     <div className={styles.controls}>
       <details ref={workspaceMenu} className={styles.workspaceControl} onToggle={loadLocalWorkspaces}>
-        <summary title={props.providerStatus}>
+        <summary title={workspaceLabel}>
           <span className={styles.statusDot} aria-hidden="true">●</span>
-          <span className={styles.providerLabel}><span>{props.providerName}</span><small>{props.providerStatus}</small></span>
+          <span className={styles.providerLabel}>{workspaceLabel}</span>
           <span aria-hidden="true">⌃</span>
         </summary>
         <div className={styles.menu}>

@@ -33,12 +33,11 @@
       font: 650 0.68rem var(--font-ui);
 
       .providerLabel {
-        display: grid;
         min-width: 0;
         flex: 1;
-
-        span, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        small { color: var(--color-text-dim); font: 0.55rem var(--font-code); }
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       > span:last-child { color: var(--color-text-dim); font-size: 0.65rem; }

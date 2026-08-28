@@ -116,9 +116,6 @@ export function App() {
   const diagnostics = useWorkspaceStore((state) => state.diagnostics);
   const conflicts = useWorkspaceStore((state) => state.conflicts);
   const recoveryItems = useWorkspaceStore((state) => state.recoveryItems);
-  const syncPendingCount = useWorkspaceStore((state) => state.syncPendingCount);
-  const syncState = useWorkspaceStore((state) => state.syncState);
-  const isIndexing = useWorkspaceStore((state) => state.isIndexing);
   const initialize = useWorkspaceStore((state) => state.initialize);
   const resumeWorkspace = useWorkspaceStore((state) => state.resumeWorkspace);
   const openWorkspace = useWorkspaceStore((state) => state.openWorkspace);
@@ -173,19 +170,10 @@ export function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const assetInput = useRef<HTMLInputElement>(null);
   const activeDocument = useMemo(() => tabs.find((tab) => tab.path === activePath) ?? null, [activePath, tabs]);
-  const totalPendingSync = syncPendingCount + tabs.filter((tab) => tab.saveState !== "clean" && tab.saveState !== "checking").length;
-  const hasSyncError = syncState === "error" || tabs.some((tab) => tab.saveState === "conflicted" || tab.saveState === "error-blocking");
-  const providerStatus = provider?.id.startsWith("drive:")
-    ? isIndexing
-      ? translate(locale, "indexing")
-      : !isOnline || syncState === "offline"
-        ? `${translate(locale, "offline")}${totalPendingSync ? ` · ${totalPendingSync}` : ""}`
-        : hasSyncError
-          ? `${translate(locale, "operationFailed")}${totalPendingSync ? ` · ${totalPendingSync}` : ""}`
-          : totalPendingSync > 0
-            ? `${translate(locale, "syncingDrive")} · ${totalPendingSync}`
-            : translate(locale, "syncedDrive")
-    : `local / ${isOnline ? "direct" : "offline"}`;
+  const driveWorkspaces = driveWorkspacesQuery.data ?? [];
+  const workspaceName = provider?.id.startsWith("drive:")
+    ? driveWorkspaces.find((workspace) => `drive:${workspace.id}` === provider.id)?.displayName ?? provider.name
+    : provider?.name;
   const isSupported = "showDirectoryPicker" in window;
   const isBrave = isBraveBrowser();
 
@@ -487,9 +475,8 @@ export function App() {
           <SidebarControls
             locale={locale}
             providerId={provider.id}
-            providerName={provider.name}
-            providerStatus={providerStatus}
-            driveWorkspaces={driveWorkspacesQuery.data ?? []}
+            workspaceName={workspaceName ?? provider.name}
+            driveWorkspaces={driveWorkspaces}
             diagnosticsCount={diagnostics.length}
             recoveryCount={recoveryItems.length}
             onOpenLocal={(workspace) => void openRecentWorkspace(workspace)}
