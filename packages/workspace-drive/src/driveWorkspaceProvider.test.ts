@@ -52,6 +52,21 @@ describe("DriveWorkspaceProvider privacy boundary", () => {
     expect(maximumActiveRequests).toBe(14);
   });
 
+  it("recovers an uncertain local-first create without uploading a duplicate", async () => {
+    const existing = { id: "drive-created", name: "new.md", mimeType: "text/markdown", modifiedTime: "2025-01-01T00:00:00Z", size: "10", version: "1", parents: ["folder-1"], appProperties: { notemarkdownEntryId: "local:create" } };
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("/drive/v3/files?") && url.includes("appProperties")) return new Response(JSON.stringify({ files: [existing] }), { status: 200 });
+      return new Response(null, { status: 404 });
+    }));
+    const provider = new DriveWorkspaceProvider({ workspaceId: "workspace-1", folderId: "folder-1", displayName: "Notes", tokenProvider: { getAccessToken: async () => "short-token" } });
+
+    await expect(provider.createDocument("new.md", "# Untitled\n", { localEntryId: "local:create", recoverExisting: true })).resolves.toMatchObject({ entryId: "drive-created", path: "new.md" });
+    expect(requests.some((url) => url.includes("/upload/"))).toBe(false);
+  });
+
   it("uses a revision-matched mirror without an alt=media request", async () => {
     const requests: string[] = [];
     const revision = { id: "md5:checksum:7", modifiedAt: Date.parse("2025-01-01T00:00:00Z"), size: 7 };

@@ -112,10 +112,12 @@ export function App() {
   const isOpening = useWorkspaceStore((state) => state.isOpening);
   const resumableWorkspace = useWorkspaceStore((state) => state.resumableWorkspace);
   const error = useWorkspaceStore((state) => state.error);
-  const lastTrash = useWorkspaceStore((state) => state.lastTrash);
+  const trashRecoveryNotice = useWorkspaceStore((state) => state.trashRecoveryNotice);
   const diagnostics = useWorkspaceStore((state) => state.diagnostics);
   const conflicts = useWorkspaceStore((state) => state.conflicts);
   const recoveryItems = useWorkspaceStore((state) => state.recoveryItems);
+  const syncPendingCount = useWorkspaceStore((state) => state.syncPendingCount);
+  const syncState = useWorkspaceStore((state) => state.syncState);
   const isIndexing = useWorkspaceStore((state) => state.isIndexing);
   const initialize = useWorkspaceStore((state) => state.initialize);
   const resumeWorkspace = useWorkspaceStore((state) => state.resumeWorkspace);
@@ -134,7 +136,8 @@ export function App() {
   const createDirectory = useWorkspaceStore((state) => state.createDirectory);
   const moveEntry = useWorkspaceStore((state) => state.moveEntry);
   const trashEntry = useWorkspaceStore((state) => state.trashEntry);
-  const restoreLastTrash = useWorkspaceStore((state) => state.restoreLastTrash);
+  const restoreRecentlyTrashedEntry = useWorkspaceStore((state) => state.restoreRecentlyTrashedEntry);
+  const dismissTrashRecoveryNotice = useWorkspaceStore((state) => state.dismissTrashRecoveryNotice);
   const restoreRecoveryItem = useWorkspaceStore((state) => state.restoreRecoveryItem);
   const removeRecoveryItem = useWorkspaceStore((state) => state.removeRecoveryItem);
   const resolveConflict = useWorkspaceStore((state) => state.resolveConflict);
@@ -170,6 +173,19 @@ export function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const assetInput = useRef<HTMLInputElement>(null);
   const activeDocument = useMemo(() => tabs.find((tab) => tab.path === activePath) ?? null, [activePath, tabs]);
+  const totalPendingSync = syncPendingCount + tabs.filter((tab) => tab.saveState !== "clean" && tab.saveState !== "checking").length;
+  const hasSyncError = syncState === "error" || tabs.some((tab) => tab.saveState === "conflicted" || tab.saveState === "error-blocking");
+  const providerStatus = provider?.id.startsWith("drive:")
+    ? isIndexing
+      ? translate(locale, "indexing")
+      : !isOnline || syncState === "offline"
+        ? `${translate(locale, "offline")}${totalPendingSync ? ` · ${totalPendingSync}` : ""}`
+        : hasSyncError
+          ? `${translate(locale, "operationFailed")}${totalPendingSync ? ` · ${totalPendingSync}` : ""}`
+          : totalPendingSync > 0
+            ? `${translate(locale, "syncingDrive")} · ${totalPendingSync}`
+            : translate(locale, "syncedDrive")
+    : `local / ${isOnline ? "direct" : "offline"}`;
   const isSupported = "showDirectoryPicker" in window;
   const isBrave = isBraveBrowser();
 
@@ -422,12 +438,12 @@ export function App() {
   };
 
   /**
-   * Confirms recoverable deletion for one entry.
+   * Requests recoverable deletion for one entry.
    * @param path Entry path to delete.
    * @returns Nothing after the provider operation is requested.
    */
   const requestTrash = (path: string): void => {
-    if (window.confirm(translate(locale, "confirmTrash"))) void trashEntry(path);
+    void trashEntry(path);
   };
 
   if (!provider) {
@@ -472,7 +488,7 @@ export function App() {
             locale={locale}
             providerId={provider.id}
             providerName={provider.name}
-            providerStatus={isIndexing ? translate(locale, "indexing") : provider.id.startsWith("drive:") ? `Google Drive / ${isOnline ? "online" : "offline"}` : `local / ${isOnline ? "direct" : "offline"}`}
+            providerStatus={providerStatus}
             driveWorkspaces={driveWorkspacesQuery.data ?? []}
             diagnosticsCount={diagnostics.length}
             recoveryCount={recoveryItems.length}
@@ -550,7 +566,7 @@ export function App() {
       {dialog === "recovery" ? <RecoveryDialog locale={locale} items={recoveryItems} onRestore={(id, path) => void restoreRecoveryItem(id, path)} onDelete={(id) => void removeRecoveryItem(id)} onClose={() => setDialog(null)} /> : null}
       {dialog === "conflicts" ? <ConflictDialog locale={locale} conflicts={conflicts} onResolve={(id, content) => void resolveConflict(id, content)} onClose={() => setDialog(null)} /> : null}
       {updateAvailable ? <UpdatePrompt locale={locale} onUpdate={() => window.setTimeout(() => void flushDurableDrafts().then(activatePwaUpdate), 320)} /> : null}
-      {lastTrash ? <RecoveryToast locale={locale} onRestore={() => void restoreLastTrash()} /> : null}
+      {trashRecoveryNotice ? <RecoveryToast key={trashRecoveryNotice.originalPath} locale={locale} onRestore={() => void restoreRecentlyTrashedEntry()} onDismiss={dismissTrashRecoveryNotice} /> : null}
       {isOpening ? <WorkspaceLoadingOverlay locale={locale} /> : null}
       {error ? <ErrorBanner message={error} locale={locale} onClose={clearError} /> : null}
       {metadataError ? <ErrorBanner message={metadataError} locale={locale} onClose={dismissMetadataError} /> : null}

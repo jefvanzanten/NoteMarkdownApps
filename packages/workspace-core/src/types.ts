@@ -100,6 +100,11 @@ export interface WriteDocumentInput {
   expectedRevision?: WorkspaceRevision;
 }
 
+export interface CreateDocumentOptions {
+  localEntryId?: string;
+  recoverExisting?: boolean;
+}
+
 export interface TrashResult {
   token: string;
   originalPath: string;
@@ -127,7 +132,7 @@ export interface WorkspaceProvider {
   readBinary(path: string): Promise<WorkspaceBinary>;
   writeBinary(path: string, blob: Blob): Promise<WorkspaceRevision>;
   writeDocument(input: WriteDocumentInput): Promise<WorkspaceRevision>;
-  createDocument(path: string, content?: string): Promise<WorkspaceDocument>;
+  createDocument(path: string, content?: string, options?: CreateDocumentOptions): Promise<WorkspaceDocument>;
   createDirectory(path: string): Promise<void>;
   move(sourcePath: string, destinationPath: string): Promise<void>;
   trash(path: string): Promise<TrashResult>;

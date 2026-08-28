@@ -1,7 +1,7 @@
 import type { DocumentFormat, WorkspaceRevision } from "@note/workspace-core";
 
 const DATABASE_NAME = "notemarkdown-local-first";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const MAX_HISTORY_ENTRIES = 120;
 
 export interface DurableDraft {
@@ -65,6 +65,7 @@ export function openDatabase(): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains("cachedDocuments")) database.createObjectStore("cachedDocuments", { keyPath: ["workspaceId", "recordKey"] });
       if (!database.objectStoreNames.contains("repositoryDrafts")) database.createObjectStore("repositoryDrafts", { keyPath: ["workspaceId", "recordKey"] });
       if (!database.objectStoreNames.contains("pendingWrites")) database.createObjectStore("pendingWrites", { keyPath: ["workspaceId", "recordKey"] });
+      if (!database.objectStoreNames.contains("pendingWorkspaceMutations")) database.createObjectStore("pendingWorkspaceMutations", { keyPath: ["workspaceId", "recordKey"] });
       if (!database.objectStoreNames.contains("conflicts")) database.createObjectStore("conflicts", { keyPath: ["workspaceId", "recordKey"] });
       if (!database.objectStoreNames.contains("repositoryHistory")) database.createObjectStore("repositoryHistory", { keyPath: ["workspaceId", "recordKey"] });
       if (!database.objectStoreNames.contains("recoveryItems")) database.createObjectStore("recoveryItems", { keyPath: ["workspaceId", "recordKey"] });

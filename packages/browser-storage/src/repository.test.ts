@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitCachedDocument,
   commitDocumentAndAcknowledgeWrite,
+  commitLocalDocumentCreate,
   commitWorkspaceChangePage,
   importLegacyDriveMirror,
   loadCachedDocument,
+  loadPendingWorkspaceMutations,
   loadPendingWrites,
   loadRepositoryDraft,
   loadRepositorySession,
@@ -103,6 +105,21 @@ describe("central browser repository", () => {
     await commitCachedDocument({ workspaceId: "local:one", entryId: "note.md", path: "note.md", content: "note", format: { hasBom: false, lineEnding: "\n" }, cachedContentRevision: revision, lastAccessedAt: 1 });
     expect((await loadWorkspaceManifest("local:one"))?.entries[0].observedProviderRevision?.id).toBe("R1");
     expect((await loadCachedDocument("local:one", "note.md"))?.cachedContentRevision.id).toBe("R1");
+  });
+
+  it("atomically commits an encrypted local create and its durable mutation", async () => {
+    await registerRepositoryWorkspace({ id: "drive:create", name: "Drive", providerType: "drive", connectedAccountId: "account", providerWorkspaceId: "create", folderId: "folder", lastOpenedAt: 1 });
+    const mutation = { id: "mutation:create", workspaceId: "drive:create", entryId: "local:one", kind: "create-document" as const, targetPath: "new.md", entry: { kind: "document" as const, name: "new.md", path: "new.md", entryId: "local:one", revision }, content: "local", format: { hasBom: false, lineEnding: "\n" as const }, state: "pending" as const, attempt: 0, createdAt: 1, updatedAt: 1 };
+    await commitLocalDocumentCreate({ workspaceId: "drive:create", entryId: "local:one", path: "new.md", content: "local", format: mutation.format, cachedContentRevision: revision, lastAccessedAt: 1 }, mutation);
+
+    expect((await loadCachedDocument("drive:create", "local:one"))?.content).toBe("local");
+    expect(await loadPendingWorkspaceMutations("drive:create")).toMatchObject([{ id: "mutation:create", state: "pending", content: "local" }]);
+    const database = await openDatabase();
+    const raw = await requestResult(database.transaction("pendingWorkspaceMutations").objectStore("pendingWorkspaceMutations").getAll()) as Array<Record<string, unknown>>;
+    database.close();
+    expect(raw[0]).toMatchObject({ encrypted: true });
+    expect(JSON.stringify(raw)).not.toContain("local");
+    expect(JSON.stringify(raw)).not.toContain("new.md");
   });
 
   it("commits a change cursor and every path-derived move atomically", async () => {

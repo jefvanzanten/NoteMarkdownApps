@@ -89,6 +89,29 @@ export interface PendingDocumentWrite {
   updatedAt?: number;
 }
 
+export type WorkspaceMutationKind = "create-document" | "create-directory" | "write-binary" | "move" | "trash" | "restore";
+export type WorkspaceMutationState = "pending" | "in-flight" | "retryable" | "blocked";
+
+export interface PendingWorkspaceMutation {
+  id: string;
+  workspaceId: string;
+  entryId: string;
+  kind: WorkspaceMutationKind;
+  sourcePath?: string;
+  targetPath: string;
+  entry: WorkspaceEntry;
+  content?: string;
+  format?: DocumentFormat;
+  binaryBase64?: string;
+  mimeType?: string;
+  restoreToken?: string;
+  state: WorkspaceMutationState;
+  attempt: number;
+  retryAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface DocumentConflict {
   id: string;
   workspaceId: string;
@@ -596,6 +619,11 @@ export async function loadCachedDocuments(workspaceId: string): Promise<CachedDo
   return getAllProtected("cachedDocuments", workspaceId);
 }
 
+/** Removes one cached document after an identity migration. @param workspaceId Workspace identity. @param entryId Previous entry identity. @returns Nothing after deletion. */
+export async function deleteCachedDocument(workspaceId: string, entryId: string): Promise<void> {
+  await deleteProtected("cachedDocuments", workspaceId, entryId);
+}
+
 /**
  * Persists an encrypted or permission-gated repository draft.
  * @param draft Durable editor buffer.
@@ -694,6 +722,54 @@ export async function savePendingWrite(pendingWrite: PendingDocumentWrite): Prom
  */
 export async function loadPendingWrites(workspaceId: string): Promise<PendingDocumentWrite[]> {
   return getAllProtected("pendingWrites", workspaceId);
+}
+
+/**
+ * Persists one durable local-first workspace mutation.
+ * @param mutation Local projection and provider operation.
+ * @returns Nothing after durable commit.
+ */
+export async function savePendingWorkspaceMutation(mutation: PendingWorkspaceMutation): Promise<void> {
+  await putProtected("pendingWorkspaceMutations", mutation.workspaceId, mutation.id, { ...mutation, updatedAt: Date.now() });
+}
+
+/**
+ * Atomically persists a locally created document and its provider mutation.
+ * @param document Local document snapshot.
+ * @param mutation Matching create mutation.
+ * @returns Nothing after both records commit.
+ */
+export async function commitLocalDocumentCreate(document: CachedDocument, mutation: PendingWorkspaceMutation): Promise<void> {
+  const envelope = await loadRepositoryWorkspace(document.workspaceId);
+  if (!envelope) throw new Error("Repository workspace is unavailable.");
+  const documentKey = await opaqueKey(envelope.salt, document.entryId);
+  const mutationKey = await opaqueKey(envelope.salt, mutation.id);
+  const documentRecord = await protect(envelope, "cachedDocuments", documentKey, document);
+  const mutationRecord = await protect(envelope, "pendingWorkspaceMutations", mutationKey, mutation);
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(["cachedDocuments", "pendingWorkspaceMutations"], "readwrite");
+    transaction.objectStore("cachedDocuments").put(documentRecord);
+    transaction.objectStore("pendingWorkspaceMutations").put(mutationRecord);
+    await completed(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Lists durable local-first workspace mutations in creation order.
+ * @param workspaceId Workspace identity.
+ * @returns Pending mutations sorted oldest first.
+ */
+export async function loadPendingWorkspaceMutations(workspaceId: string): Promise<PendingWorkspaceMutation[]> {
+  const mutations = await getAllProtected<PendingWorkspaceMutation>("pendingWorkspaceMutations", workspaceId);
+  return mutations.sort((left, right) => left.createdAt - right.createdAt);
+}
+
+/** Removes one provider-acknowledged workspace mutation. @param workspaceId Workspace identity. @param id Mutation identity. @returns Nothing after deletion. */
+export async function deletePendingWorkspaceMutation(workspaceId: string, id: string): Promise<void> {
+  await deleteProtected("pendingWorkspaceMutations", workspaceId, id);
 }
 
 /**

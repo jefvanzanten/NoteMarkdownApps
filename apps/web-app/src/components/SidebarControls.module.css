@@ -32,8 +32,16 @@
       padding: 0 0.75rem;
       font: 650 0.68rem var(--font-ui);
 
-      span:nth-child(2) { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
-      span:last-child { color: var(--color-text-dim); font-size: 0.65rem; }
+      .providerLabel {
+        display: grid;
+        min-width: 0;
+        flex: 1;
+
+        span, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        small { color: var(--color-text-dim); font: 0.55rem var(--font-code); }
+      }
+
+      > span:last-child { color: var(--color-text-dim); font-size: 0.65rem; }
     }
   }
 

@@ -72,7 +72,7 @@ export function SidebarControls(props: SidebarControlsProps) {
       <details ref={workspaceMenu} className={styles.workspaceControl} onToggle={loadLocalWorkspaces}>
         <summary title={props.providerStatus}>
           <span className={styles.statusDot} aria-hidden="true">●</span>
-          <span>{props.providerName}</span>
+          <span className={styles.providerLabel}><span>{props.providerName}</span><small>{props.providerStatus}</small></span>
           <span aria-hidden="true">⌃</span>
         </summary>
         <div className={styles.menu}>

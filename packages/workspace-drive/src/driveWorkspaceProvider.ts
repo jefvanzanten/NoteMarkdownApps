@@ -2,6 +2,7 @@ import {
   WorkspaceError,
   ensureMarkdownPath,
   supportedImageExtensions,
+  type CreateDocumentOptions,
   type DocumentFormat,
   type TrashResult,
   type WorkspaceBinary,
@@ -21,7 +22,7 @@ import {
 } from "@note/workspace-core";
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";
-const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,size,md5Checksum,sha256Checksum,version,parents,trashed";
+const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,size,md5Checksum,sha256Checksum,version,parents,trashed,appProperties";
 const DRIVE_SCAN_CONCURRENCY = 14;
 
 interface DriveFile {
@@ -35,6 +36,7 @@ interface DriveFile {
   version?: string;
   parents?: string[];
   trashed?: boolean;
+  appProperties?: Record<string, string>;
   knownRevision?: WorkspaceRevision;
   knownFingerprint?: WorkspaceMetadataFingerprint;
 }
@@ -782,12 +784,33 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
    * @param mimeType Content MIME type.
    * @returns Created metadata.
    */
-  private async createFile(path: string, blob: Blob, mimeType: string): Promise<DriveFile> {
+  private async createFile(path: string, blob: Blob, mimeType: string, options: CreateDocumentOptions = {}): Promise<DriveFile> {
     const parts = path.split("/");
     const name = parts.pop()!;
     const parentId = await this.ensureDirectory(parts.join("/"));
+    if (options.localEntryId && options.recoverExisting) {
+      const known = this.filesByPath.get(path);
+      if (known?.appProperties?.notemarkdownEntryId === options.localEntryId) return known;
+      if (known) throw new WorkspaceError("collision", `${path} already exists.`);
+      const escapedId = options.localEntryId.replace(/['\\]/g, "\\$&");
+      const escapedName = name.replace(/['\\]/g, "\\$&");
+      const params = new URLSearchParams({
+        q: `'${parentId}' in parents and name = '${escapedName}' and trashed = false and appProperties has { key='notemarkdownEntryId' and value='${escapedId}' }`,
+        fields: `files(${DRIVE_FIELDS})`,
+        pageSize: "2",
+        spaces: "drive",
+      });
+      const existingResponse = await this.request(`https://www.googleapis.com/drive/v3/files?${params}`, {}, "list");
+      const existing = (await existingResponse.json() as { files?: DriveFile[] }).files?.[0];
+      if (existing) {
+        this.filesByPath.set(path, existing);
+        this.filesById.set(existing.id, existing);
+        this.pathsById.set(existing.id, path);
+        return existing;
+      }
+    }
     const boundary = `nm_${crypto.randomUUID()}`;
-    const metadata = JSON.stringify({ name, mimeType, parents: [parentId] });
+    const metadata = JSON.stringify({ name, mimeType, parents: [parentId], ...(options.localEntryId ? { appProperties: { notemarkdownEntryId: options.localEntryId } } : {}) });
     const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`, blob, `\r\n--${boundary}--`]);
     const response = await this.request(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${encodeURIComponent(DRIVE_FIELDS)}`, {
       method: "POST",
@@ -865,11 +888,11 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
    * @param content Initial Markdown.
    * @returns Created document.
    */
-  async createDocument(path: string, content = ""): Promise<WorkspaceDocument> {
+  async createDocument(path: string, content = "", options: CreateDocumentOptions = {}): Promise<WorkspaceDocument> {
     const normalizedPath = ensureMarkdownPath(path);
-    if (this.filesByPath.has(normalizedPath) || this.collisions.has(normalizedPath)) throw new WorkspaceError("collision", `${normalizedPath} already exists.`);
+    if ((!options.recoverExisting && this.filesByPath.has(normalizedPath)) || this.collisions.has(normalizedPath)) throw new WorkspaceError("collision", `${normalizedPath} already exists.`);
     const format: DocumentFormat = { hasBom: false, lineEnding: "\n" };
-    const file = await this.createFile(normalizedPath, encodeDocument(content, format), "text/markdown");
+    const file = await this.createFile(normalizedPath, encodeDocument(content, format), "text/markdown", options);
     const document = { path: normalizedPath, content, format, revision: revision(file), entryId: file.id, metadataFingerprint: metadataFingerprint(file) };
     await this.options.mirror?.saveDocument(document);
     return document;

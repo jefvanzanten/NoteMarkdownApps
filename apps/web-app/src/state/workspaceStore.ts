@@ -22,11 +22,14 @@ import {
   acknowledgeIndexRevision,
   commitCachedDocument,
   commitDocumentAndAcknowledgeWrite,
+  commitLocalDocumentCreate,
   commitWorkspaceChangePage,
   cleanupRebuildableCache,
   createManifestEntries,
+  deleteCachedDocument,
   deleteConflict,
   deleteDraft,
+  deletePendingWorkspaceMutation,
   deletePendingWrite,
   deleteRecoveryItem,
   deleteRepositoryDraft,
@@ -37,6 +40,7 @@ import {
   loadHistory,
   loadLastRepositoryWorkspace,
   loadLastWorkspace,
+  loadPendingWorkspaceMutations,
   loadPendingWrites,
   loadRecoveryItems,
   loadRepositoryDraft,
@@ -54,6 +58,7 @@ import {
   PENDING_WRITE_FORMAT_VERSION,
   registerRepositoryWorkspace,
   saveConflict,
+  savePendingWorkspaceMutation,
   savePendingWrite,
   saveRecoveryItem,
   saveRepositoryDraft,
@@ -67,6 +72,7 @@ import {
   type DocumentConflict,
   type HistoryEntry,
   type PendingDocumentWrite,
+  type PendingWorkspaceMutation,
   type RecoveryItem,
   type RepositoryDraft,
   type RepositoryWorkspaceReference,
@@ -122,10 +128,12 @@ interface WorkspaceState {
   isIndexing: boolean;
   resumableWorkspace: StoredWorkspace | null;
   error: string | null;
-  lastTrash: TrashResult | null;
+  trashRecoveryNotice: TrashResult | null;
   diagnostics: WorkspaceDiagnostic[];
   conflicts: DocumentConflict[];
   recoveryItems: RecoveryItem[];
+  syncPendingCount: number;
+  syncState: "idle" | "syncing" | "offline" | "error";
   initialize: () => Promise<void>;
   resumeWorkspace: () => Promise<void>;
   openWorkspace: () => Promise<void>;
@@ -140,11 +148,12 @@ interface WorkspaceState {
   setViewMode: (path: string, viewMode: DocumentViewMode) => void;
   requestEditingTakeover: (path: string) => Promise<void>;
   saveDocument: (path: string) => Promise<void>;
-  createDocument: (path: string, options?: { selectEntry?: boolean; activate?: boolean }) => Promise<string | null>;
+  createDocument: (path: string, options?: { selectEntry?: boolean; activate?: boolean; content?: string }) => Promise<string | null>;
   createDirectory: (path: string) => Promise<void>;
   moveEntry: (sourcePath: string, destinationPath: string) => Promise<void>;
   trashEntry: (path: string) => Promise<void>;
-  restoreLastTrash: () => Promise<void>;
+  restoreRecentlyTrashedEntry: () => Promise<void>;
+  dismissTrashRecoveryNotice: () => void;
   restoreRecoveryItem: (id: string, destinationPath: string) => Promise<void>;
   removeRecoveryItem: (id: string) => Promise<void>;
   resolveConflict: (id: string, content: string | null) => Promise<void>;
@@ -934,6 +943,8 @@ async function reconcileProvider(
   const startedAt = performance.now();
   recordSyncDiagnostic({ operation: "reconciliation", outcome: "started" });
   const pendingWrites = await loadPendingWrites(provider.id);
+  const pendingWorkspaceMutations = await loadPendingWorkspaceMutations(provider.id);
+  const provisionalEntryIds = new Set(pendingWorkspaceMutations.filter((mutation) => mutation.kind === "create-document").map((mutation) => mutation.entryId));
   recordSyncDiagnostic({ operation: "pending-write", outcome: pendingWrites.length > 0 ? "queued" : "skipped", itemCount: pendingWrites.length });
   const resumableWrites: PendingDocumentWrite[] = [];
   for (const pending of pendingWrites) {
@@ -980,8 +991,8 @@ async function reconcileProvider(
 
   const reconciledState = get();
   const active = reconciledState.tabs.find((tab) => tab.path === reconciledState.activePath);
-  if (active) await reconcileOpenDocument(provider, active, 1, generation, set, get);
-  for (const tab of reconciledState.tabs.filter((item) => item.entryId !== active?.entryId)) await reconcileOpenDocument(provider, tab, 2, generation, set, get);
+  if (active && !provisionalEntryIds.has(active.entryId)) await reconcileOpenDocument(provider, active, 1, generation, set, get);
+  for (const tab of reconciledState.tabs.filter((item) => item.entryId !== active?.entryId && !provisionalEntryIds.has(item.entryId))) await reconcileOpenDocument(provider, tab, 2, generation, set, get);
 
   const discovery = await scheduler.enqueue({
     key: provider.listChanges ? "drive-changes" : "manifest-scan",
@@ -1014,8 +1025,9 @@ async function reconcileProvider(
     const movedDocument = await loadCachedDocument(provider.id, move.entryId);
     if (movedDocument) void indexSearchDocument(move.nextPath, movedDocument.content);
   }
+  const visibleEntries = applyPendingWorkspaceMutations(discovery.entries, await loadPendingWorkspaceMutations(provider.id));
   set((current) => ({
-    entries: discovery.entries,
+    entries: visibleEntries,
     tabs: current.tabs.map((tab) => {
       const move = discovery.moves.find((item) => item.entryId === tab.entryId);
       return move ? { ...tab, path: move.nextPath } : tab;
@@ -1068,13 +1080,13 @@ async function reconcileProvider(
       if (!(error instanceof CancelledWorkError)) set({ error: errorMessage(error) });
     }));
   }
-  set({ diagnostics: calculateDiagnostics(derivedDocuments, discovery.entries), isIndexing: contentTasks.length > 0 });
+  set({ diagnostics: calculateDiagnostics(derivedDocuments, visibleEntries), isIndexing: contentTasks.length > 0 });
   await Promise.all(contentTasks);
   if (!deferBackgroundContent && get().provider?.id === provider.id && generation === workspaceGeneration) {
     const completeDocuments = (await loadCachedDocuments(provider.id))
       .filter((document) => liveDocumentById.has(document.entryId))
       .map((document) => ({ ...document, path: liveDocumentById.get(document.entryId)?.path ?? document.path }));
-    set({ diagnostics: calculateDiagnostics(completeDocuments, discovery.entries), isIndexing: false });
+    set({ diagnostics: calculateDiagnostics(completeDocuments, visibleEntries), isIndexing: false });
     await cleanupRebuildableCache(provider.id, new Set(get().tabs.map((tab) => tab.entryId)));
   }
   const durationMs = performance.now() - startedAt;
@@ -1138,6 +1150,8 @@ async function activateProvider(
     await saveWorkspaceManifest({ workspaceId: provider.id, entries: createManifestEntries(provider.id, entries), generation, updatedAt: Date.now() });
   }
   provider.primeEntries?.(entries);
+  const pendingWorkspaceMutations = await loadPendingWorkspaceMutations(provider.id);
+  entries = applyPendingWorkspaceMutations(entries, pendingWorkspaceMutations);
 
   const identityByPath = new Map(flattenEntries(entries).map((entry) => [entry.path, entry.entryId ?? entry.path]));
   await migrateLegacyWorkspace(provider.id, identityByPath);
@@ -1199,10 +1213,12 @@ async function activateProvider(
     isIndexing: true,
     resumableWorkspace: null,
     error: null,
-    lastTrash: null,
+    trashRecoveryNotice: null,
     diagnostics: calculateDiagnostics(cachedDocuments, entries),
     conflicts,
     recoveryItems,
+    syncPendingCount: pendingWorkspaceMutations.length,
+    syncState: pendingWorkspaceMutations.length === 0 ? "idle" : navigator.onLine ? "syncing" : "offline",
   });
   const activationDurationMs = performance.now() - startedAt;
   recordWorkspaceMetric("workspace_activate_ms", activationDurationMs);
@@ -1231,11 +1247,13 @@ async function activateProvider(
     });
   }, () => {
     if (leadership?.isLeader && get().provider?.id === provider.id) {
+      void processPendingWorkspaceMutations(provider, set, get);
       void reconcileProvider(provider, generation, set, get);
     }
   });
   recordSyncDiagnostic({ operation: "leadership", outcome: leadership?.isLeader ? "succeeded" : "skipped" });
   if (leadership?.isLeader && generation === workspaceGeneration) {
+    void processPendingWorkspaceMutations(provider, set, get);
     void reconcileProvider(provider, generation, set, get).catch((error) => {
       if (!(error instanceof CancelledWorkError) && get().provider?.id === provider.id) set({ error: errorMessage(error), isIndexing: false });
     });
@@ -1389,6 +1407,151 @@ async function updateReferencesAfterMove(
   }
 }
 
+/** Applies durable local mutations over the last provider projection. @param entries Provider entries. @param mutations Durable pending operations. @returns Local-first visible entries. */
+function applyPendingWorkspaceMutations(entries: WorkspaceEntry[], mutations: PendingWorkspaceMutation[]): WorkspaceEntry[] {
+  return mutations.reduce((current, mutation) => {
+    if (mutation.kind === "create-document" || mutation.kind === "create-directory" || mutation.kind === "write-binary" || mutation.kind === "restore") {
+      return flattenEntries(current).some((entry) => entry.path === mutation.targetPath)
+        ? current
+        : insertWorkspaceEntry(current, mutation.entry);
+    }
+    if (mutation.kind === "move" && mutation.sourcePath) {
+      return flattenEntries(current).some((entry) => entry.path === mutation.sourcePath)
+        ? moveWorkspaceEntry(current, mutation.sourcePath, mutation.targetPath)
+        : current;
+    }
+    if (mutation.kind === "trash") return removeWorkspaceEntry(current, mutation.targetPath).entries;
+    return current;
+  }, entries);
+}
+
+/** Replaces one provisional entry identity after Drive acknowledges a create. @param entries Workspace tree. @param previousId Local provisional identity. @param nextId Drive identity. @returns Remapped tree. */
+function replaceWorkspaceEntryIdentity(entries: WorkspaceEntry[], previousId: string, nextId: string): WorkspaceEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    entryId: entry.entryId === previousId ? nextId : entry.entryId,
+    parentEntryId: entry.parentEntryId === previousId ? nextId : entry.parentEntryId,
+    children: entry.children ? replaceWorkspaceEntryIdentity(entry.children, previousId, nextId) : undefined,
+  }));
+}
+
+/** Encodes browser binary bytes for the encrypted JSON mutation envelope. @param buffer Binary asset bytes. @returns Base64 payload. */
+function encodeMutationBinary(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return btoa(binary);
+}
+
+/** Decodes an encrypted JSON mutation payload for provider upload. @param value Base64 payload. @param mimeType Original asset MIME type. @returns Uploadable blob. */
+function decodeMutationBinary(value: string, mimeType: string): Blob {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type: mimeType });
+}
+
+const workspaceMutationRuns = new Map<string, Promise<void>>();
+
+/** Processes durable local workspace mutations from the current sync-leader tab. @param provider Active provider. @param set Zustand setter. @param get Zustand accessor. @returns Nothing after currently eligible operations finish. */
+async function processPendingWorkspaceMutations(
+  provider: WorkspaceProvider,
+  set: (partial: Partial<WorkspaceState> | ((state: WorkspaceState) => Partial<WorkspaceState>)) => void,
+  get: () => WorkspaceState,
+): Promise<void> {
+  const existingRun = workspaceMutationRuns.get(provider.id);
+  if (existingRun) return existingRun;
+  const run = (async () => {
+    const updateState = (partial: Partial<WorkspaceState> | ((state: WorkspaceState) => Partial<WorkspaceState>)): void => {
+      if (get().provider?.id === provider.id) set(partial);
+    };
+    let mutations = await loadPendingWorkspaceMutations(provider.id);
+    if (mutations.length === 0) {
+      updateState({ syncPendingCount: 0, syncState: "idle" });
+      return;
+    }
+    if (!navigator.onLine) {
+      updateState({ syncPendingCount: mutations.length, syncState: "offline" });
+      return;
+    }
+    if (leadership && !leadership.isLeader) {
+      leadership.requestSync();
+      updateState({ syncPendingCount: mutations.length, syncState: "syncing" });
+      return;
+    }
+    updateState({ syncPendingCount: mutations.length, syncState: "syncing" });
+    for (const mutation of mutations) {
+      if (get().provider?.id !== provider.id) break;
+      if (mutation.state === "blocked" || (mutation.retryAt && mutation.retryAt > Date.now())) continue;
+      const claimed = { ...mutation, state: "in-flight" as const, updatedAt: Date.now() };
+      await savePendingWorkspaceMutation(claimed);
+      try {
+        if (mutation.kind === "create-document") {
+          const document = await provider.createDocument(mutation.targetPath, mutation.content ?? "", {
+            localEntryId: mutation.entryId,
+            recoverExisting: mutation.attempt > 0 || mutation.state === "in-flight",
+          });
+          const nextEntryId = document.entryId ?? document.path;
+          await commitCachedDocument(cachedDocumentFromProvider(provider.id, nextEntryId, document));
+          if (nextEntryId !== mutation.entryId) {
+            await deleteCachedDocument(provider.id, mutation.entryId);
+            const leaseKey = `${provider.id}:${mutation.entryId}`;
+            await editingLeases.get(leaseKey)?.release();
+            editingLeases.delete(leaseKey);
+            if (get().provider?.id === provider.id) {
+              const lease = await acquireDocumentEditingLease(provider.id, nextEntryId, editorOwnerToken);
+              if (lease) editingLeases.set(`${provider.id}:${nextEntryId}`, lease);
+            }
+          }
+          updateState((state) => ({
+            entries: replaceWorkspaceEntryIdentity(state.entries, mutation.entryId, nextEntryId),
+            tabs: state.tabs.map((tab) => tab.entryId === mutation.entryId ? { ...tab, entryId: nextEntryId, revision: document.revision, metadataFingerprint: document.metadataFingerprint, editingState: editingLeases.has(`${provider.id}:${nextEntryId}`) ? "owned" : "read-only", saveState: tab.content === document.content ? "clean" : "dirty-local" } : tab),
+          }));
+          if (get().provider?.id === provider.id) scheduleSession(get);
+        } else if (mutation.kind === "create-directory") {
+          await provider.createDirectory(mutation.targetPath);
+        } else if (mutation.kind === "write-binary" && mutation.binaryBase64 && mutation.mimeType) {
+          await provider.writeBinary(mutation.targetPath, decodeMutationBinary(mutation.binaryBase64, mutation.mimeType));
+        } else if (mutation.kind === "move" && mutation.sourcePath) {
+          const metadata = provider.getEntryMetadata ? await provider.getEntryMetadata(mutation.entryId.startsWith("local:") ? { path: mutation.sourcePath } : { entryId: mutation.entryId }) : null;
+          if (metadata?.path !== mutation.targetPath) await provider.move(metadata?.path ?? mutation.sourcePath, mutation.targetPath);
+        } else if (mutation.kind === "trash") {
+          const metadata = provider.getEntryMetadata ? await provider.getEntryMetadata(mutation.entryId.startsWith("local:") ? { path: mutation.targetPath } : { entryId: mutation.entryId }) : null;
+          const result = metadata?.state === "removed"
+            ? { token: JSON.stringify({ id: mutation.entryId, path: mutation.targetPath }), originalPath: mutation.targetPath }
+            : await provider.trash(metadata?.path ?? mutation.targetPath);
+          updateState((state) => state.trashRecoveryNotice?.token === mutation.id ? { trashRecoveryNotice: result } : {});
+        } else if (mutation.kind === "restore" && mutation.restoreToken) {
+          await provider.restore(mutation.restoreToken);
+        }
+        await deletePendingWorkspaceMutation(provider.id, mutation.id);
+        mutations = await loadPendingWorkspaceMutations(provider.id);
+        updateState({ syncPendingCount: mutations.length, syncState: mutations.length === 0 ? "idle" : "syncing" });
+      } catch (error) {
+        const retryDelayMs = providerWriteRetryDelay(error, mutation.attempt);
+        await savePendingWorkspaceMutation({
+          ...mutation,
+          state: retryDelayMs === null ? "blocked" : "retryable",
+          attempt: mutation.attempt + 1,
+          retryAt: retryDelayMs === null ? undefined : Date.now() + retryDelayMs,
+          updatedAt: Date.now(),
+        });
+        updateState({ syncPendingCount: mutations.length, syncState: navigator.onLine ? "error" : "offline", error: errorMessage(error) });
+        break;
+      }
+    }
+    if (mutations.length === 0 && get().provider?.id === provider.id) void get().refreshEntries();
+  })().finally(() => {
+    workspaceMutationRuns.delete(provider.id);
+    if (get().provider?.id === provider.id) {
+      void loadPendingWorkspaceMutations(provider.id).then((pending) => {
+        if (pending.some((mutation) => mutation.state !== "blocked" && (!mutation.retryAt || mutation.retryAt <= Date.now()))) window.setTimeout(() => { void processPendingWorkspaceMutations(provider, set, get); }, 0);
+      });
+    }
+  });
+  workspaceMutationRuns.set(provider.id, run);
+  return run;
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   provider: null,
   entries: [],
@@ -1399,10 +1562,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   isIndexing: false,
   resumableWorkspace: null,
   error: null,
-  lastTrash: null,
+  trashRecoveryNotice: null,
   diagnostics: [],
   conflicts: [],
   recoveryItems: [],
+  syncPendingCount: 0,
+  syncState: "idle",
 
   initialize: () => {
     if (workspaceInitialization) return workspaceInitialization;
@@ -1520,12 +1685,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const refreshVersion = entriesStateVersion;
     try {
       const previous = await loadWorkspaceManifest(provider.id);
-      const entries = await provider.listEntries();
+      const providerEntries = await provider.listEntries();
       if (get().provider?.id !== provider.id || refreshVersion !== entriesStateVersion) return;
-      provider.primeEntries?.(entries);
+      provider.primeEntries?.(providerEntries);
+      const pendingMutations = await loadPendingWorkspaceMutations(provider.id);
+      const entries = applyPendingWorkspaceMutations(providerEntries, pendingMutations);
       const manifest: WorkspaceManifest = {
         workspaceId: provider.id,
-        entries: createManifestEntries(provider.id, entries),
+        entries: createManifestEntries(provider.id, providerEntries),
         generation: Math.max(previous?.generation ?? 0, workspaceGeneration) + 1,
         updatedAt: Date.now(),
       };
@@ -1678,6 +1845,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const operationGeneration = workspaceGeneration;
       const snapshot = state.tabs.find((tab) => tab.entryId === initialDocument.entryId);
       if (!provider || provider.id !== initialProvider.id || !snapshot || snapshot.editingState === "read-only" || snapshot.saveState === "clean" || snapshot.saveState === "checking" || snapshot.saveState === "persisting-local" || snapshot.saveState === "conflicted") return;
+      if (snapshot.entryId.startsWith("local:")) {
+        const createMutation = (await loadPendingWorkspaceMutations(provider.id)).find((mutation) => mutation.entryId === snapshot.entryId && mutation.kind === "create-document");
+        await persistDocument(provider.id, snapshot);
+        if (createMutation && createMutation.state !== "in-flight") {
+          await savePendingWorkspaceMutation({ ...createMutation, content: snapshot.content, format: snapshot.format, updatedAt: Date.now() });
+          set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === snapshot.entryId ? { ...tab, saveState: "queued" } : tab) }));
+          void processPendingWorkspaceMutations(provider, set, get);
+          return;
+        }
+        await processPendingWorkspaceMutations(provider, set, get);
+        const remapped = get().tabs.find((tab) => tab.path === snapshot.path);
+        if (remapped && !remapped.entryId.startsWith("local:") && remapped.content !== createMutation?.content) {
+          set((current) => ({ tabs: current.tabs.map((tab) => tab.entryId === remapped.entryId ? { ...tab, saveState: "dirty-local" } : tab) }));
+          window.setTimeout(() => { void get().saveDocument(remapped.path); }, 0);
+        }
+        return;
+      }
       const timer = draftTimers.get(snapshot.path);
     if (timer) window.clearTimeout(timer);
       draftTimers.delete(snapshot.path);
@@ -1822,26 +2006,67 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   createDocument: async (path, options = {}) => {
     const provider = get().provider;
-    const { selectEntry = true, activate = true } = options;
+    const { selectEntry = true, activate = true, content = "# Untitled\n" } = options;
     if (!provider) return null;
     try {
-      const document = await provider.createDocument(ensureMarkdownPath(path), "# Untitled\n");
-      const entryId = document.entryId ?? document.path;
+      const normalizedPath = ensureMarkdownPath(path);
+      if (!(provider instanceof DriveWorkspaceProvider)) {
+        const document = await provider.createDocument(normalizedPath, content);
+        const entryId = document.entryId ?? document.path;
+        invalidateEntriesRefreshes();
+        set((state) => ({ entries: insertWorkspaceEntry(state.entries, documentToWorkspaceEntry(document)), error: null }));
+        await commitCachedDocument(cachedDocumentFromProvider(provider.id, entryId, document));
+        void get().refreshEntries();
+        const lease = await acquireDocumentEditingLease(provider.id, entryId, editorOwnerToken);
+        if (lease) editingLeases.set(`${provider.id}:${entryId}`, lease);
+        set((state) => ({
+          tabs: [...state.tabs, { ...document, entryId, editingState: lease ? "owned" : "read-only", cursor: document.content.length, viewMode: "editor", saveState: "clean" }],
+          activePath: activate ? document.path : state.activePath,
+          selectedPath: selectEntry ? document.path : state.selectedPath,
+          error: null,
+        }));
+        indexSearchDocument(document.path, document.content);
+        scheduleSession(get);
+        return document.path;
+      }
+      if (flattenEntries(get().entries).some((entry) => entry.path === normalizedPath)) throw new WorkspaceError("collision", `${normalizedPath} already exists.`);
+      const now = Date.now();
+      const entryId = `local:${crypto.randomUUID()}`;
+      const format: DocumentFormat = { hasBom: false, lineEnding: "\n" };
+      const revision: WorkspaceRevision = { id: entryId, modifiedAt: now, size: new TextEncoder().encode(content).byteLength };
+      const document: WorkspaceDocument = { path: normalizedPath, content, format, revision, entryId };
+      const entry = documentToWorkspaceEntry(document);
+      const mutation: PendingWorkspaceMutation = {
+        id: `mutation:${crypto.randomUUID()}`,
+        workspaceId: provider.id,
+        entryId,
+        kind: "create-document",
+        targetPath: normalizedPath,
+        entry,
+        content,
+        format,
+        state: "pending",
+        attempt: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await commitLocalDocumentCreate(cachedDocumentFromProvider(provider.id, entryId, document), mutation);
       invalidateEntriesRefreshes();
-      set((state) => ({ entries: insertWorkspaceEntry(state.entries, documentToWorkspaceEntry(document)), error: null }));
-      await commitCachedDocument(cachedDocumentFromProvider(provider.id, entryId, document));
-      void get().refreshEntries();
       const lease = await acquireDocumentEditingLease(provider.id, entryId, editorOwnerToken);
       if (lease) editingLeases.set(`${provider.id}:${entryId}`, lease);
       set((state) => ({
-        tabs: [...state.tabs, { ...document, entryId, editingState: lease ? "owned" : "read-only", cursor: document.content.length, viewMode: "editor", saveState: "clean" }],
-        activePath: activate ? document.path : state.activePath,
-        selectedPath: selectEntry ? document.path : state.selectedPath,
+        entries: insertWorkspaceEntry(state.entries, entry),
+        tabs: [...state.tabs, { ...document, entryId, editingState: lease ? "owned" : "read-only", cursor: content.length, viewMode: "editor", saveState: "queued" }],
+        activePath: activate ? normalizedPath : state.activePath,
+        selectedPath: selectEntry ? normalizedPath : state.selectedPath,
+        syncPendingCount: state.syncPendingCount + 1,
+        syncState: navigator.onLine ? "syncing" : "offline",
         error: null,
       }));
-      indexSearchDocument(document.path, document.content);
+      indexSearchDocument(normalizedPath, content);
       scheduleSession(get);
-      return document.path;
+      void processPendingWorkspaceMutations(provider, set, get);
+      return normalizedPath;
     } catch (error) {
       set({ error: errorMessage(error) });
       return null;
@@ -1852,10 +2077,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const provider = get().provider;
     if (!provider) return;
     try {
-      await provider.createDirectory(path);
+      if (!(provider instanceof DriveWorkspaceProvider)) {
+        await provider.createDirectory(path);
+        invalidateEntriesRefreshes();
+        set((state) => ({ entries: insertWorkspaceEntry(state.entries, createDirectoryEntry(path)), selectedPath: path, error: null }));
+        void get().refreshEntries();
+        return;
+      }
+      const now = Date.now();
+      const entry = { ...createDirectoryEntry(path), entryId: `local:${crypto.randomUUID()}` };
+      const mutation: PendingWorkspaceMutation = { id: `mutation:${crypto.randomUUID()}`, workspaceId: provider.id, entryId: entry.entryId, kind: "create-directory", targetPath: path, entry, state: "pending", attempt: 0, createdAt: now, updatedAt: now };
+      await savePendingWorkspaceMutation(mutation);
       invalidateEntriesRefreshes();
-      set((state) => ({ entries: insertWorkspaceEntry(state.entries, createDirectoryEntry(path)), selectedPath: path, error: null }));
-      void get().refreshEntries();
+      set((state) => ({ entries: insertWorkspaceEntry(state.entries, entry), selectedPath: path, syncPendingCount: state.syncPendingCount + 1, syncState: navigator.onLine ? "syncing" : "offline", error: null }));
+      void processPendingWorkspaceMutations(provider, set, get);
     } catch (error) {
       set({ error: errorMessage(error) });
     }
@@ -1864,6 +2099,41 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   moveEntry: async (sourcePath, destinationPath) => {
     const provider = get().provider;
     if (!provider) return;
+    if (provider instanceof DriveWorkspaceProvider) {
+      try {
+        const entry = flattenEntries(get().entries).find((candidate) => candidate.path === sourcePath);
+        if (!entry) throw new WorkspaceError("not-found", `${sourcePath} no longer exists.`);
+        const now = Date.now();
+        const existingMutations = await loadPendingWorkspaceMutations(provider.id);
+        const pendingCreate = existingMutations.find((mutation) => mutation.entryId === entry.entryId && (mutation.kind === "create-document" || mutation.kind === "create-directory" || mutation.kind === "write-binary"));
+        if (pendingCreate && pendingCreate.state !== "in-flight") {
+          await savePendingWorkspaceMutation({ ...pendingCreate, targetPath: destinationPath, entry: remapWorkspaceEntry(pendingCreate.entry, sourcePath, destinationPath), updatedAt: now });
+        } else {
+          const mutation: PendingWorkspaceMutation = { id: `mutation:${crypto.randomUUID()}`, workspaceId: provider.id, entryId: entry.entryId ?? entry.path, kind: "move", sourcePath, targetPath: destinationPath, entry, state: "pending", attempt: 0, createdAt: now, updatedAt: now };
+          await savePendingWorkspaceMutation(mutation);
+        }
+        const cachedDocuments = await loadCachedDocuments(provider.id);
+        for (const document of cachedDocuments.filter((item) => item.path === sourcePath || item.path.startsWith(`${sourcePath}/`))) {
+          await moveRepositoryEntry(provider.id, document.entryId, replacePathPrefix(document.path, sourcePath, destinationPath));
+        }
+        invalidateEntriesRefreshes();
+        set((state) => ({
+          entries: moveWorkspaceEntry(state.entries, sourcePath, destinationPath),
+          tabs: state.tabs.map((tab) => ({ ...tab, path: replacePathPrefix(tab.path, sourcePath, destinationPath) })),
+          activePath: state.activePath ? replacePathPrefix(state.activePath, sourcePath, destinationPath) : null,
+          selectedPath: destinationPath,
+          syncPendingCount: pendingCreate && pendingCreate.state !== "in-flight" ? state.syncPendingCount : state.syncPendingCount + 1,
+          syncState: navigator.onLine ? "syncing" : "offline",
+          error: null,
+        }));
+        removeSearchDocument(sourcePath);
+        scheduleSession(get);
+        void processPendingWorkspaceMutations(provider, set, get);
+      } catch (error) {
+        set({ error: errorMessage(error) });
+      }
+      return;
+    }
     const generation = workspaceGeneration;
     const documentEntries = flattenEntries(get().entries).filter((entry) => entry.kind === "document");
     const cachedDocumentsPromise = loadCachedDocuments(provider.id);
@@ -1923,37 +2193,103 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!provider) return;
     try {
       await get().flushDurableDrafts();
-      const lastTrash = await provider.trash(path);
+      if (!(provider instanceof DriveWorkspaceProvider)) {
+        const trashResult = await provider.trash(path);
+        invalidateEntriesRefreshes();
+        removeSearchDocument(path);
+        set((state) => {
+          const tabs = state.tabs.filter((tab) => tab.path !== path && !tab.path.startsWith(`${path}/`));
+          return { entries: removeWorkspaceEntry(state.entries, path).entries, trashRecoveryNotice: trashResult, tabs, activePath: state.activePath && (state.activePath === path || state.activePath.startsWith(`${path}/`)) ? tabs.at(-1)?.path ?? null : state.activePath, selectedPath: null, error: null };
+        });
+        void get().refreshEntries();
+        scheduleSession(get);
+        return;
+      }
+      const entry = flattenEntries(get().entries).find((candidate) => candidate.path === path);
+      if (!entry) throw new WorkspaceError("not-found", `${path} no longer exists.`);
+      const mutations = await loadPendingWorkspaceMutations(provider.id);
+      const pendingCreate = mutations.find((mutation) => mutation.entryId === entry.entryId && (mutation.kind === "create-document" || mutation.kind === "create-directory" || mutation.kind === "write-binary"));
+      let mutationId: string;
+      let pendingDelta: number;
+      if (pendingCreate && pendingCreate.state !== "in-flight") {
+        await deletePendingWorkspaceMutation(provider.id, pendingCreate.id);
+        if (entry.kind === "document") await deleteCachedDocument(provider.id, entry.entryId ?? entry.path);
+        mutationId = pendingCreate.id;
+        pendingDelta = -1;
+      } else {
+        const now = Date.now();
+        mutationId = `mutation:${crypto.randomUUID()}`;
+        const mutation: PendingWorkspaceMutation = { id: mutationId, workspaceId: provider.id, entryId: entry.entryId ?? entry.path, kind: "trash", targetPath: path, entry, state: "pending", attempt: 0, createdAt: now, updatedAt: now };
+        await savePendingWorkspaceMutation(mutation);
+        pendingDelta = 1;
+      }
       invalidateEntriesRefreshes();
       removeSearchDocument(path);
       set((state) => {
         const tabs = state.tabs.filter((tab) => tab.path !== path && !tab.path.startsWith(`${path}/`));
         return {
           entries: removeWorkspaceEntry(state.entries, path).entries,
-          lastTrash,
+          trashRecoveryNotice: pendingDelta < 0 ? null : { token: mutationId, originalPath: path },
           tabs,
           activePath: state.activePath && (state.activePath === path || state.activePath.startsWith(`${path}/`)) ? tabs.at(-1)?.path ?? null : state.activePath,
           selectedPath: null,
+          syncPendingCount: Math.max(0, state.syncPendingCount + pendingDelta),
+          syncState: state.syncPendingCount + pendingDelta === 0 ? "idle" : navigator.onLine ? "syncing" : "offline",
           error: null,
         };
       });
-      void get().refreshEntries();
       scheduleSession(get);
+      if (!pendingCreate || pendingCreate.state === "in-flight") void processPendingWorkspaceMutations(provider, set, get);
     } catch (error) {
       set({ error: errorMessage(error) });
     }
   },
 
-  restoreLastTrash: async () => {
-    const { provider, lastTrash } = get();
-    if (!provider || !lastTrash) return;
+  restoreRecentlyTrashedEntry: async () => {
+    const { provider, trashRecoveryNotice } = get();
+    if (!provider || !trashRecoveryNotice) return;
     try {
-      await provider.restore(lastTrash.token);
-      set({ lastTrash: null, selectedPath: lastTrash.originalPath, error: null });
-      await get().refreshEntries();
+      if (!(provider instanceof DriveWorkspaceProvider)) {
+        await provider.restore(trashRecoveryNotice.token);
+        set({ trashRecoveryNotice: null, selectedPath: trashRecoveryNotice.originalPath, error: null });
+        await get().refreshEntries();
+        return;
+      }
+      const mutations = await loadPendingWorkspaceMutations(provider.id);
+      const pendingTrash = mutations.find((mutation) => mutation.id === trashRecoveryNotice.token && mutation.kind === "trash");
+      if (pendingTrash && pendingTrash.state !== "in-flight") {
+        await deletePendingWorkspaceMutation(provider.id, pendingTrash.id);
+        set((state) => ({
+          entries: insertWorkspaceEntry(state.entries, pendingTrash.entry),
+          trashRecoveryNotice: null,
+          selectedPath: pendingTrash.targetPath,
+          syncPendingCount: Math.max(0, state.syncPendingCount - 1),
+          syncState: state.syncPendingCount <= 1 ? "idle" : state.syncState,
+          error: null,
+        }));
+        return;
+      }
+      if (pendingTrash?.state === "in-flight") {
+        await processPendingWorkspaceMutations(provider, set, get);
+      }
+      const appliedRecoveryNotice = get().trashRecoveryNotice;
+      if (!appliedRecoveryNotice || appliedRecoveryNotice.token.startsWith("mutation:")) return;
+      const manifest = await loadWorkspaceManifest(provider.id);
+      const previousEntry = flattenEntries(manifestToWorkspaceEntries(manifest?.entries ?? [])).find((entry) => entry.path === appliedRecoveryNotice.originalPath);
+      if (!previousEntry) throw new WorkspaceError("not-found", `${appliedRecoveryNotice.originalPath} could not be restored locally.`);
+      const now = Date.now();
+      const mutation: PendingWorkspaceMutation = { id: `mutation:${crypto.randomUUID()}`, workspaceId: provider.id, entryId: previousEntry.entryId ?? previousEntry.path, kind: "restore", targetPath: appliedRecoveryNotice.originalPath, entry: previousEntry, restoreToken: appliedRecoveryNotice.token, state: "pending", attempt: 0, createdAt: now, updatedAt: now };
+      await savePendingWorkspaceMutation(mutation);
+      set((state) => ({ entries: insertWorkspaceEntry(state.entries, previousEntry), trashRecoveryNotice: null, selectedPath: appliedRecoveryNotice.originalPath, syncPendingCount: state.syncPendingCount + 1, syncState: navigator.onLine ? "syncing" : "offline", error: null }));
+      void processPendingWorkspaceMutations(provider, set, get);
     } catch (error) {
       set({ error: errorMessage(error) });
     }
+  },
+
+  /** Clears the expired recoverable-delete notification. @returns Nothing. */
+  dismissTrashRecoveryNotice: () => {
+    set({ trashRecoveryNotice: null });
   },
 
   /**
@@ -1967,13 +2303,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const item = state.recoveryItems.find((record) => record.id === id);
     if (!state.provider || !item) return;
     try {
-      const document = await state.provider.createDocument(ensureMarkdownPath(destinationPath), item.content);
-      const entryId = document.entryId ?? document.path;
-      await commitCachedDocument(cachedDocumentFromProvider(state.provider.id, entryId, document));
+      const createdPath = await get().createDocument(ensureMarkdownPath(destinationPath), { content: item.content });
+      if (!createdPath) return;
       await deleteRecoveryItem(state.provider.id, id);
       set((current) => ({ recoveryItems: current.recoveryItems.filter((record) => record.id !== id), error: null }));
-      await get().refreshEntries();
-      await get().openDocument(document.path);
     } catch (error) {
       set({ error: errorMessage(error) });
     }
@@ -2057,20 +2390,35 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       let content = active.content;
       let cursor = active.cursor;
       const reservedPaths = new Set(flattenEntries(get().entries).map((entry) => entry.path));
+      const localEntries: WorkspaceEntry[] = [];
       for (const file of supported) {
         const extension = file.name.match(/\.(png|jpe?g|gif|webp|avif|svg)$/i)?.[0].toLowerCase() ?? ".png";
         const base = file.name.replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "") || "image";
         let assetPath = `${assetDirectory}/${base}${extension}`;
         let attempt = 1;
         while (reservedPaths.has(assetPath)) assetPath = `${assetDirectory}/${base}-${attempt++}${extension}`;
-        await provider.writeBinary(assetPath, file);
+        if (provider instanceof DriveWorkspaceProvider) {
+          const now = Date.now();
+          const entry: WorkspaceEntry = { kind: "image", name: assetPath.split("/").at(-1) ?? assetPath, path: assetPath, entryId: `local:${crypto.randomUUID()}`, state: "live" };
+          await savePendingWorkspaceMutation({ id: `mutation:${crypto.randomUUID()}`, workspaceId: provider.id, entryId: entry.entryId!, kind: "write-binary", targetPath: assetPath, entry, binaryBase64: encodeMutationBinary(await file.arrayBuffer()), mimeType: file.type, state: "pending", attempt: 0, createdAt: now, updatedAt: now });
+          localEntries.push(entry);
+        } else {
+          await provider.writeBinary(assetPath, file);
+        }
         reservedPaths.add(assetPath);
         const link = `![${base}](${relativeTarget(active.path, assetPath)})`;
         content = `${content.slice(0, cursor)}${link}${content.slice(cursor)}`;
         cursor += link.length;
       }
       get().updateDocument(active.path, content, cursor);
-      await get().refreshEntries();
+      if (provider instanceof DriveWorkspaceProvider) {
+        invalidateEntriesRefreshes();
+        set((current) => ({ entries: localEntries.reduce((entries, entry) => insertWorkspaceEntry(entries, entry), current.entries), syncPendingCount: current.syncPendingCount + localEntries.length, syncState: navigator.onLine ? "syncing" : "offline" }));
+        await get().flushDurableDrafts();
+        void processPendingWorkspaceMutations(provider, set, get);
+      } else {
+        await get().refreshEntries();
+      }
     } catch (error) {
       set({ error: errorMessage(error) });
     }
@@ -2079,6 +2427,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   checkExternalChanges: async () => {
     const state = get();
     if (!state.provider || !leadership?.isLeader || document.visibilityState !== "visible" || !navigator.onLine) return;
+    await processPendingWorkspaceMutations(state.provider, set, get);
     const now = Date.now();
     const active = state.tabs.find((tab) => tab.path === state.activePath);
     if (active && now - (lastMetadataChecks.get(active.entryId) ?? 0) >= 30_000) {
