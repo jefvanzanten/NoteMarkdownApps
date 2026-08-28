@@ -5,11 +5,10 @@ import { translate } from "../i18n";
 import {
   clearActivityJournal,
   exportActivityJournal,
-  getActivityRecordingSnapshot,
   getActivityServerSnapshot,
   getActivitySnapshot,
-  isActivityJournalAvailable,
-  setActivityRecording,
+  getHourlyMetricsServerSnapshot,
+  getHourlyMetricsSnapshot,
   subscribeActivityJournal,
   type ActivityCategory,
   type ActivityEvent,
@@ -44,7 +43,8 @@ async function downloadActivityJournal(): Promise<void> {
 /** Renders the persistent development activity viewer. @param locale Active UI locale. @returns Filterable local activity panel. */
 function ActivityJournal({ locale }: { locale: Locale }) {
   const events = useSyncExternalStore(subscribeActivityJournal, getActivitySnapshot, getActivityServerSnapshot);
-  const recording = useSyncExternalStore(subscribeActivityJournal, getActivityRecordingSnapshot, getActivityRecordingSnapshot);
+  const hourlyMetrics = useSyncExternalStore(subscribeActivityJournal, getHourlyMetricsSnapshot, getHourlyMetricsServerSnapshot);
+  const latestMetrics = hourlyMetrics.at(-1);
   const [category, setCategory] = useState<ActivityCategory | "all">("all");
   const [level, setLevel] = useState<ActivityLevel | "all">("all");
   const [query, setQuery] = useState("");
@@ -64,12 +64,15 @@ function ActivityJournal({ locale }: { locale: Locale }) {
   return (
     <section className={`${styles.diagnosticSection} ${styles.activityPanel}`}>
       <div className={styles.diagnosticHeading}>
-        <div><h3>{translate(locale, "activityLog")}</h3><small>{translate(locale, "activityLogPrivacy")}</small></div>
+        <div>
+          <h3>{translate(locale, "activityLog")}</h3>
+          <small>{translate(locale, "activityLogPrivacy")}</small>
+          {latestMetrics ? <small>{translate(locale, "recentActivityMetrics")}: API {latestMetrics.apiSuccessCount} · Drive {latestMetrics.driveReadCount} · Cache {latestMetrics.cacheHitCount}/{latestMetrics.cacheMissCount} · Reconciliation {latestMetrics.reconciliationCount}</small> : null}
+        </div>
         <div className={styles.diagnosticActions}>
-          <button type="button" onClick={() => setActivityRecording(!recording)} disabled={!isActivityJournalAvailable()}>{translate(locale, recording ? "stopRecording" : "startRecording")}</button>
-          <button type="button" onClick={() => void copyJournal()} disabled={events.length === 0}>{translate(locale, "copyLog")}</button>
-          <button type="button" onClick={() => void downloadActivityJournal()} disabled={events.length === 0}>{translate(locale, "exportLog")}</button>
-          <button type="button" onClick={() => void clearActivityJournal()} disabled={events.length === 0}>{translate(locale, "clearLog")}</button>
+          <button type="button" onClick={() => void copyJournal()} disabled={events.length === 0 && hourlyMetrics.length === 0}>{translate(locale, "copyLog")}</button>
+          <button type="button" onClick={() => void downloadActivityJournal()} disabled={events.length === 0 && hourlyMetrics.length === 0}>{translate(locale, "exportLog")}</button>
+          <button type="button" onClick={() => void clearActivityJournal()} disabled={events.length === 0 && hourlyMetrics.length === 0}>{translate(locale, "clearLog")}</button>
         </div>
       </div>
       <div className={styles.activityFilters}>

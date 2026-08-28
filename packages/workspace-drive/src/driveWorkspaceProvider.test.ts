@@ -90,6 +90,25 @@ describe("DriveWorkspaceProvider privacy boundary", () => {
     expect(requests.some((url) => url.includes("alt=media"))).toBe(false);
   });
 
+  it("updates move indexes without scanning the whole Drive workspace", async () => {
+    const requests: string[] = [];
+    const original = { id: "stable-1", name: "note.md", mimeType: "text/markdown", modifiedTime: "2025-01-01T00:00:00Z", size: "7", version: "1", parents: ["folder-1"] };
+    const moved = { ...original, name: "renamed.md", version: "2" };
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("/drive/v3/files?")) return new Response(JSON.stringify({ files: [original] }), { status: 200 });
+      if (url.includes("/drive/v3/files/stable-1?") && url.includes("addParents")) return new Response(JSON.stringify(moved), { status: 200 });
+      if (url.includes("/drive/v3/files/stable-1?fields=")) return new Response(JSON.stringify(moved), { status: 200 });
+      return new Response(null, { status: 404 });
+    }));
+    const provider = new DriveWorkspaceProvider({ workspaceId: "workspace-1", folderId: "folder-1", displayName: "Notes", tokenProvider: { getAccessToken: async () => "short-token" } });
+    await provider.listEntries();
+    await provider.move("note.md", "renamed.md");
+    await expect(provider.getEntryMetadata({ entryId: "stable-1", path: "renamed.md" })).resolves.toMatchObject({ path: "renamed.md" });
+    expect(requests.filter((url) => url.includes("/drive/v3/files?")).length).toBe(1);
+  });
+
   it("accepts a second write after Google advances only its internal version", async () => {
     const original = { id: "stable-1", name: "note.md", mimeType: "text/markdown", modifiedTime: "2025-01-01T00:00:00Z", size: "7", version: "27", md5Checksum: "original-sum", parents: ["folder-1"] };
     const changed = { ...original, modifiedTime: "2025-01-02T00:00:00Z", size: "8", version: "29", md5Checksum: "changed-sum" };

@@ -215,6 +215,18 @@ function decodeDocument(path: string, file: DriveFile, bytes: ArrayBuffer): Work
 }
 
 /**
+ * Replaces a path prefix for a moved entry and its descendants.
+ * @param path Existing workspace-relative path.
+ * @param sourcePath Moved source path.
+ * @param destinationPath New source path.
+ * @returns Updated workspace-relative path.
+ */
+function replacePathPrefix(path: string, sourcePath: string, destinationPath: string): string {
+  if (path === sourcePath) return destinationPath;
+  return path.startsWith(`${sourcePath}/`) ? `${destinationPath}${path.slice(sourcePath.length)}` : path;
+}
+
+/**
  * Flattens provider entries for incremental subtree change emission.
  * @param entries Hierarchical provider entries.
  * @returns Entries in parent-first order.
@@ -873,10 +885,27 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
   }
 
   /**
+   * Applies a successful move to the in-memory identity and path indexes.
+   * @param sourcePath Existing path.
+   * @param destinationPath New path.
+   * @param movedFile Fresh metadata returned by Drive.
+   * @returns Nothing after all affected paths are rebuilt.
+   */
+  private applyMoveMetadata(sourcePath: string, destinationPath: string, movedFile: DriveFile): void {
+    for (const [entryId, path] of this.pathsById) {
+      if (path === sourcePath || path.startsWith(`${sourcePath}/`)) {
+        this.pathsById.set(entryId, replacePathPrefix(path, sourcePath, destinationPath));
+      }
+    }
+    this.filesById.set(movedFile.id, movedFile);
+    this.rebuildPathLookups();
+  }
+
+  /**
    * Moves or renames one Drive entry while preserving stable identity.
    * @param sourcePath Existing path.
    * @param destinationPath New path.
-   * @returns Nothing after metadata refresh.
+   * @returns Nothing after local metadata indexes are updated.
    */
   async move(sourcePath: string, destinationPath: string): Promise<void> {
     const file = await this.resolve(sourcePath);
@@ -888,12 +917,19 @@ export class DriveWorkspaceProvider implements WorkspaceProvider {
       removeParents: file.parents?.join(",") ?? "",
       fields: DRIVE_FIELDS,
     });
-    await this.request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?${params}`, {
+    const response = await this.request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?${params}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),
     }, "mutation");
-    await this.listEntries();
+    const responseFile = await response.json() as DriveFile;
+    this.applyMoveMetadata(sourcePath, destinationPath, {
+      ...file,
+      ...responseFile,
+      id: file.id,
+      name,
+      parents: responseFile.parents ?? [parentId],
+    });
   }
 
   /**

@@ -8,12 +8,15 @@ interface FileTreeProps {
   entries: WorkspaceEntry[];
   query: string;
   selectedPath: string | null;
+  renamingPath: string | null;
   locale: Locale;
   onOpenDocument: (path: string) => void;
   onSelect: (path: string) => void;
   onMoveEntry: (sourcePath: string, destinationPath: string) => void;
   onCreateDocument: (directoryPath: string) => void;
   onRename: (path: string) => void;
+  onCommitRename: (path: string, name: string) => void;
+  onCancelRename: () => void;
   onTrash: (path: string) => void;
 }
 
@@ -24,6 +27,52 @@ interface ContextMenuState {
 }
 
 const WORKSPACE_ENTRY_DRAG_TYPE = "application/x-notemarkdown-entry";
+
+interface InlineRenameProps {
+  entry: WorkspaceEntry;
+  level: number;
+  locale: Locale;
+  onCommit: (path: string, name: string) => void;
+  onCancel: () => void;
+}
+
+/**
+ * Renders a focused tree-row name editor for a new or existing entry.
+ * @param props Entry, nesting, locale, and completion callbacks.
+ * @returns Inline rename form that reveals and selects its initial name.
+ */
+function InlineRename({ entry, level, locale, onCommit, onCancel }: InlineRenameProps) {
+  const initialName = entry.kind === "document" && entry.name.toLocaleLowerCase().endsWith(".md") ? entry.name.slice(0, -3) : entry.name;
+  const [name, setName] = useState(initialName);
+
+  /** Commits one valid slash-free entry name. @returns Nothing after commit or focus restoration. */
+  const commit = (): void => {
+    const normalizedName = name.trim();
+    if (!normalizedName || normalizedName.includes("/")) {
+      onCancel();
+      return;
+    }
+    onCommit(entry.path, normalizedName);
+  };
+
+  return (
+    <form className={`${styles.row} ${styles.renameRow}`} style={{ paddingInlineStart: `${0.7 + (level - 1) * 1.05}rem` }} onSubmit={(event) => { event.preventDefault(); commit(); }}>
+      <span className={styles.disclosure} aria-hidden="true" />
+      <span className={styles.icon} aria-hidden="true">·</span>
+      <input
+        autoFocus
+        value={name}
+        aria-label={translate(locale, "rename")}
+        onChange={(event) => setName(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onBlur={commit}
+        onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancel(); } }}
+        ref={(input) => input?.scrollIntoView({ block: "nearest" })}
+      />
+      {entry.kind === "document" ? <span className={styles.extension}>.md</span> : null}
+    </form>
+  );
+}
 
 /**
  * Filters a tree while retaining directories that contain matching descendants.
@@ -60,7 +109,7 @@ function groupDirectoriesFirst(entries: WorkspaceEntry[]): WorkspaceEntry[] {
  * @param props Entries, selection, query, locale, and interaction callbacks.
  * @returns The file tree.
  */
-export function FileTree({ entries, query, selectedPath, locale, onOpenDocument, onSelect, onMoveEntry, onCreateDocument, onRename, onTrash }: FileTreeProps) {
+export function FileTree({ entries, query, selectedPath, renamingPath, locale, onOpenDocument, onSelect, onMoveEntry, onCreateDocument, onRename, onCommitRename, onCancelRename, onTrash }: FileTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
@@ -179,10 +228,14 @@ export function FileTree({ entries, query, selectedPath, locale, onOpenDocument,
    */
   const renderEntries = (levelEntries: WorkspaceEntry[], level: number): React.ReactNode => groupDirectoriesFirst(levelEntries).map((entry) => {
     const isDirectory = entry.kind === "directory";
-    const isExpanded = query.trim() ? true : expandedPaths.has(entry.path);
+    const containsRenamingEntry = renamingPath?.startsWith(`${entry.path}/`) === true;
+    const isExpanded = query.trim() ? true : expandedPaths.has(entry.path) || containsRenamingEntry;
     const icon = entry.kind === "document" ? "·" : "◇";
     return (
       <li key={entry.path} role="treeitem" aria-expanded={isDirectory ? isExpanded : undefined} aria-level={level}>
+        {renamingPath === entry.path ? (
+          <InlineRename entry={entry} level={level} locale={locale} onCommit={onCommitRename} onCancel={onCancelRename} />
+        ) : (
         <button
           type="button"
           className={`${styles.row} ${selectedPath === entry.path ? styles.selected : ""} ${dropTargetPath === entry.path ? styles.dropTarget : ""}`}
@@ -219,6 +272,7 @@ export function FileTree({ entries, query, selectedPath, locale, onOpenDocument,
           <span className={styles.name}>{entry.name}</span>
           {entry.kind === "image" ? <span className={styles.srOnly}>{translate(locale, "image")}</span> : null}
         </button>
+        )}
         {isDirectory && isExpanded && entry.children?.length ? (
           <ul className={styles.group} role="group">{renderEntries(entry.children, level + 1)}</ul>
         ) : null}

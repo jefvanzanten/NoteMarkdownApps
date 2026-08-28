@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownEditor } from "@note/editor";
-import { availableMarkdownPath, ensureMarkdownPath } from "@note/workspace-core";
+import { availableMarkdownPath, ensureMarkdownPath, type WorkspaceEntry } from "@note/workspace-core";
 import type { OpenDocument } from "./state/workspaceStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { detectLocale, translate, type Locale } from "./i18n";
@@ -123,6 +123,7 @@ export function App() {
   const openRecentWorkspace = useWorkspaceStore((state) => state.openRecentWorkspace);
   const openDriveWorkspace = useWorkspaceStore((state) => state.openDriveWorkspace);
   const openDocument = useWorkspaceStore((state) => state.openDocument);
+  const activateDocument = useWorkspaceStore((state) => state.activateDocument);
   const closeDocument = useWorkspaceStore((state) => state.closeDocument);
   const selectPath = useWorkspaceStore((state) => state.selectPath);
   const updateDocument = useWorkspaceStore((state) => state.updateDocument);
@@ -147,6 +148,9 @@ export function App() {
   const locale: Locale = settings.locale ?? detectLocale();
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const pendingTabCreatePaths = useRef(new Set<string>());
+  const latestTabCreateRequest = useRef(0);
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true");
   const [sidebarWidth, setSidebarWidth] = useState(292);
@@ -333,11 +337,44 @@ export function App() {
   };
 
   /**
-   * Creates and opens one collision-free Markdown note from the leading plus tab.
+   * Finds an available tab-created document path, including in-flight requests.
+   * @returns Collision-free root Markdown path.
+   */
+  const nextTabDocumentPath = (): string => {
+    const reservedEntries: WorkspaceEntry[] = [
+      ...tabs.map((tab) => ({ kind: "document" as const, name: tab.path.split("/").at(-1) ?? tab.path, path: tab.path })),
+      ...Array.from(pendingTabCreatePaths.current, (path) => ({ kind: "document" as const, name: path.split("/").at(-1) ?? path, path })),
+    ];
+    return availableMarkdownPath([...entries, ...reservedEntries]);
+  };
+
+  /**
+   * Creates one note from a file-tree action and starts its inline rename.
+   * @param directoryPath Destination directory, or workspace root.
    * @returns Nothing after the provider operation is requested.
    */
   const requestCreateDocument = (directoryPath = ""): void => {
-    void createDocument(availableMarkdownPath(entries, directoryPath));
+    if (renamingPath) return;
+    const requestedPath = availableMarkdownPath(entries, directoryPath);
+    setRenamingPath(requestedPath);
+    void createDocument(requestedPath).then((createdPath) => {
+      setRenamingPath((currentPath) => currentPath === requestedPath ? createdPath : currentPath);
+    });
+  };
+
+  /**
+   * Creates a real uniquely named document tab without changing the file browser.
+   * @returns Nothing after the provider operation is requested.
+   */
+  const requestCreateTab = (): void => {
+    const requestedPath = nextTabDocumentPath();
+    const requestId = latestTabCreateRequest.current + 1;
+    latestTabCreateRequest.current = requestId;
+    pendingTabCreatePaths.current.add(requestedPath);
+    void createDocument(requestedPath, { selectEntry: false, activate: false }).then((createdPath) => {
+      pendingTabCreatePaths.current.delete(requestedPath);
+      if (createdPath && requestId === latestTabCreateRequest.current) activateDocument(createdPath);
+    });
   };
 
   /**
@@ -350,17 +387,28 @@ export function App() {
   };
 
   /**
-   * Prompts for a new name while keeping the entry in its current directory.
+   * Starts inline naming for an existing workspace entry.
    * @param path Entry path to rename.
-   * @returns Nothing after the provider operation is requested.
+   * @returns Nothing after the tree editor is requested.
    */
   const requestRename = (path: string): void => {
+    setQuery("");
+    setRenamingPath(path);
+  };
+
+  /**
+   * Commits an inline name while keeping the entry in its current directory.
+   * @param path Existing workspace entry path.
+   * @param name User-authored slash-free entry name.
+   * @returns Nothing after the provider operation is requested.
+   */
+  const commitRename = (path: string, name: string): void => {
     const segments = path.split("/");
     const currentName = segments.pop() ?? path;
-    const nextName = window.prompt(translate(locale, "promptRename"), currentName)?.trim();
-    if (!nextName || nextName === currentName || nextName.includes("/")) return;
-    const destination = [...segments, nextName].filter(Boolean).join("/");
-    void moveEntry(path, currentName.toLocaleLowerCase().endsWith(".md") ? ensureMarkdownPath(destination) : destination);
+    const destination = [...segments, name].filter(Boolean).join("/");
+    const normalizedDestination = currentName.toLocaleLowerCase().endsWith(".md") ? ensureMarkdownPath(destination) : destination;
+    setRenamingPath(null);
+    if (normalizedDestination !== path) void moveEntry(path, normalizedDestination);
   };
 
   /**
@@ -418,7 +466,7 @@ export function App() {
             <input ref={assetInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple onChange={(event) => { if (event.target.files) addImages(event.target.files); event.target.value = ""; }} />
           </div>
           <div className={styles.treeScroll}>
-            {query.trim() ? <SearchResults results={searchResults} locale={locale} onOpen={handleOpenDocument} /> : <FileTree entries={entries} query="" selectedPath={selectedPath} locale={locale} onOpenDocument={handleOpenDocument} onSelect={selectPath} onMoveEntry={(sourcePath, destinationPath) => void moveEntry(sourcePath, destinationPath)} onCreateDocument={requestCreateDocument} onRename={requestRename} onTrash={requestTrash} />}
+            {query.trim() ? <SearchResults results={searchResults} locale={locale} onOpen={handleOpenDocument} /> : <FileTree entries={entries} query="" selectedPath={selectedPath} renamingPath={renamingPath} locale={locale} onOpenDocument={handleOpenDocument} onSelect={selectPath} onMoveEntry={(sourcePath, destinationPath) => void moveEntry(sourcePath, destinationPath)} onCreateDocument={requestCreateDocument} onRename={requestRename} onCommitRename={commitRename} onCancelRename={() => setRenamingPath(null)} onTrash={requestTrash} />}
           </div>
           <SidebarControls
             locale={locale}
@@ -443,7 +491,7 @@ export function App() {
         <main className={styles.main}>
           <div className={styles.documentBar}>
             <button type="button" className={styles.mobileMenu} onClick={() => setSidebarOpen(true)} aria-label={translate(locale, "menu")}>☰</button>
-            <Tabs tabs={tabs} activePath={activePath} locale={locale} onActivate={handleOpenDocument} onClose={(path) => window.setTimeout(() => closeDocument(path), 320)} onCreate={requestCreateDocument} />
+            <Tabs tabs={tabs} activePath={activePath} locale={locale} onActivate={activateDocument} onClose={(path) => window.setTimeout(() => closeDocument(path), 320)} onCreate={requestCreateTab} />
             {activeDocument ? (
               <div className={styles.modeToggle} role="group" aria-label={`${translate(locale, "editor")} / ${translate(locale, "preview")}`}>
                 {activeDocument.editingState === "read-only" ? <button type="button" onClick={() => void requestEditingTakeover(activeDocument.path)}>{translate(locale, "takeOverEditing")}</button> : null}

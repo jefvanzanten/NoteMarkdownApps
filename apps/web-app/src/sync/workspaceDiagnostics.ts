@@ -36,7 +36,6 @@ interface SyncDiagnosticsOptions {
 }
 
 const MAX_SYNC_DIAGNOSTIC_EVENTS = 300;
-const ROUTINE_ACTIVITY_SUMMARY_MS = 5 * 60 * 1_000;
 const LEGACY_SYNC_DIAGNOSTICS_STORAGE_KEY = "notemarkdown:sync-diagnostics:v1";
 const MAX_DIAGNOSTIC_REPORT_BYTES = 60 * 1_024;
 const metrics = new Map<WorkspaceMetricName, number>();
@@ -49,10 +48,6 @@ let options: SyncDiagnosticsOptions = {
 };
 const reportedErrors = new WeakSet<object>();
 let globalHandlersInstalled = false;
-let routineSummaryStartedAt = Date.now();
-let routineReconciliationChecks = 0;
-let routineDriveReadRequests = 0;
-let routineDurationMs = 0;
 
 /**
  * Configures temporary error-triggered sync diagnostics for this browser process.
@@ -61,10 +56,6 @@ let routineDurationMs = 0;
  */
 export function configureSyncDiagnostics(nextOptions: SyncDiagnosticsOptions): void {
   options = nextOptions;
-  routineSummaryStartedAt = Date.now();
-  routineReconciliationChecks = 0;
-  routineDriveReadRequests = 0;
-  routineDurationMs = 0;
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.removeItem(LEGACY_SYNC_DIAGNOSTICS_STORAGE_KEY);
@@ -81,63 +72,23 @@ export function getSyncDiagnosticEvents(): SyncDiagnosticEvent[] {
   return [...memoryEvents];
 }
 
-/** Emits one compact activity summary after the routine-event window expires. @param now Current epoch time. @returns Nothing after an optional summary reset. */
-function flushRoutineActivitySummary(now: number): void {
-  if (now - routineSummaryStartedAt < ROUTINE_ACTIVITY_SUMMARY_MS) return;
-  if (routineReconciliationChecks > 0 || routineDriveReadRequests > 0) {
-    recordActivity("sync", "sync.routine.summary", {
-      durationMs: routineDurationMs,
-      driveReadRequests: routineDriveReadRequests,
-      reconciliationChecks: routineReconciliationChecks,
-      windowMs: now - routineSummaryStartedAt,
-    }, "debug");
-  }
-  routineSummaryStartedAt = now;
-  routineReconciliationChecks = 0;
-  routineDriveReadRequests = 0;
-  routineDurationMs = 0;
-}
-
-/** Determines whether one routine successful event was aggregated instead of journaled. @param event Sync diagnostic event. @returns Whether individual activity recording was suppressed. */
-function aggregateRoutineActivity(event: Omit<SyncDiagnosticEvent, "timestamp">): boolean {
-  const now = Date.now();
-  flushRoutineActivitySummary(now);
-  if (event.operation === "document-reconciliation" && event.outcome === "started") return true;
-  if (event.operation === "document-reconciliation" && event.outcome === "succeeded") {
-    routineReconciliationChecks += 1;
-    routineDurationMs += event.durationMs ?? 0;
-    return true;
-  }
-  const routineDriveRead = event.operation === "drive-request"
-    && (event.requestKind === "metadata" || event.requestKind === "list" || event.requestKind === "change");
-  if (routineDriveRead && event.outcome === "started") return true;
-  if (routineDriveRead && event.outcome === "succeeded") {
-    routineDriveReadRequests += 1;
-    routineDurationMs += event.durationMs ?? 0;
-    return true;
-  }
-  return false;
-}
-
 /**
- * Adds one path-free event to the temporary in-memory timeline.
+ * Adds one path-free event to the temporary in-memory timeline and the classified activity journal.
  * @param event Diagnostic facts containing no provider or document identity.
  * @returns Nothing after bounded retention.
  */
 export function recordSyncDiagnostic(event: Omit<SyncDiagnosticEvent, "timestamp">): void {
-  if (!aggregateRoutineActivity(event)) {
-    recordActivity("sync", `sync.${event.operation}.${event.outcome}`, {
-      attempt: event.attempt,
-      durationMs: event.durationMs,
-      errorCode: event.errorCode,
-      itemCount: event.itemCount,
-      requestBytes: event.requestBytes,
-      requestKind: event.requestKind,
-      responseBytes: event.responseBytes,
-      retryDelayMs: event.retryDelayMs,
-      status: event.status,
-    }, event.outcome === "failed" ? "error" : event.outcome === "retrying" || event.outcome === "slow" ? "warning" : "info", event.operationId);
-  }
+  recordActivity("sync", `sync.${event.operation}.${event.outcome}`, {
+    attempt: event.attempt,
+    durationMs: event.durationMs,
+    errorCode: event.errorCode,
+    itemCount: event.itemCount,
+    requestBytes: event.requestBytes,
+    requestKind: event.requestKind,
+    responseBytes: event.responseBytes,
+    retryDelayMs: event.retryDelayMs,
+    status: event.status,
+  }, event.outcome === "failed" ? "error" : event.outcome === "retrying" || event.outcome === "slow" ? "warning" : "info", event.operationId);
   if (!options.enabled) return;
   memoryEvents = [...memoryEvents, { ...event, timestamp: Date.now() }].slice(-MAX_SYNC_DIAGNOSTIC_EVENTS);
 }

@@ -3,8 +3,10 @@ import {
   WorkspaceError,
   ensureMarkdownPath,
   resolveWorkspaceTarget,
+  workspaceDirname,
   type DocumentFormat,
   type TrashResult,
+  type WorkspaceDocument,
   type WorkspaceEntry,
   type WorkspaceMetadataFingerprint,
   type WorkspaceProvider,
@@ -131,13 +133,14 @@ interface WorkspaceState {
   openDriveWorkspace: (reference: DriveWorkspaceReference) => Promise<void>;
   refreshEntries: () => Promise<void>;
   openDocument: (path: string) => Promise<void>;
+  activateDocument: (path: string) => void;
   closeDocument: (path: string) => void;
   selectPath: (path: string) => void;
   updateDocument: (path: string, content: string, cursor: number) => void;
   setViewMode: (path: string, viewMode: DocumentViewMode) => void;
   requestEditingTakeover: (path: string) => Promise<void>;
   saveDocument: (path: string) => Promise<void>;
-  createDocument: (path: string) => Promise<void>;
+  createDocument: (path: string, options?: { selectEntry?: boolean; activate?: boolean }) => Promise<string | null>;
   createDirectory: (path: string) => Promise<void>;
   moveEntry: (sourcePath: string, destinationPath: string) => Promise<void>;
   trashEntry: (path: string) => Promise<void>;
@@ -153,13 +156,31 @@ interface WorkspaceState {
   clearError: () => void;
 }
 
+const EDITOR_OWNER_STORAGE_KEY = "notemarkdown:editor-owner:v1";
 const draftTimers = new Map<string, number>();
 const lastMetadataChecks = new Map<string, number>();
 const draftPersistenceQueue = new KeyedSerialTaskQueue();
 const providerWriteQueue = new KeyedSerialTaskQueue();
 const persistedDrafts = new Map<string, RepositoryDraft>();
-const editorOwnerToken = crypto.randomUUID();
 const editingLeases = new Map<string, EditingLeaseHandle>();
+
+/**
+ * Returns one editor identity that survives reloads within the same browser tab.
+ * @returns Stable tab-scoped editor owner token.
+ */
+function editorOwnerIdentifier(): string {
+  try {
+    const existing = sessionStorage.getItem(EDITOR_OWNER_STORAGE_KEY);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    sessionStorage.setItem(EDITOR_OWNER_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+const editorOwnerToken = editorOwnerIdentifier();
 const warmWorkspaceCacheEnabled = import.meta.env.VITE_WARM_WORKSPACE_CACHE !== "false";
 const scheduler = new PriorityScheduler({
   concurrency: 3,
@@ -168,8 +189,20 @@ const scheduler = new PriorityScheduler({
 let sessionTimer: number | null = null;
 let workspaceInitialization: Promise<void> | null = null;
 let workspaceGeneration = 0;
+let entriesStateVersion = 0;
 let leadership: LeadershipHandle | null = null;
 let editingChannel: BroadcastChannel | null = null;
+
+/**
+ * Releases active editing leases without delaying page suspension or navigation.
+ * @returns Nothing after best-effort releases are started.
+ */
+function releaseEditingLeasesBeforeExit(): void {
+  for (const lease of editingLeases.values()) void lease.release();
+  editingLeases.clear();
+}
+
+if (typeof window !== "undefined") window.addEventListener("pagehide", releaseEditingLeasesBeforeExit);
 
 /**
  * Requests persistent browser storage once after durable workspace use is established.
@@ -189,6 +222,146 @@ function requestDurableStorageOnce(): void {
  */
 function flattenEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] {
   return entries.flatMap((entry) => [entry, ...(entry.children ? flattenEntries(entry.children) : [])]);
+}
+
+/**
+ * Invalidates workspace-entry refreshes that started before a provider mutation.
+ * @returns Nothing after older refresh results are marked stale.
+ */
+function invalidateEntriesRefreshes(): void {
+  entriesStateVersion += 1;
+}
+
+/**
+ * Sorts workspace entries in the same order as provider scans.
+ * @param entries Entries at one tree level.
+ * @returns A sorted copy of the entries.
+ */
+function sortWorkspaceEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] {
+  return [...entries].sort((left, right) => {
+    if (left.kind === "directory" && right.kind !== "directory") return -1;
+    if (right.kind === "directory" && left.kind !== "directory") return 1;
+    return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+  });
+}
+
+/**
+ * Creates a directory entry for a known or provider-created path.
+ * @param path Workspace-relative directory path.
+ * @param children Known children of the directory.
+ * @returns A live directory entry.
+ */
+function createDirectoryEntry(path: string, children: WorkspaceEntry[] = []): WorkspaceEntry {
+  return {
+    kind: "directory",
+    name: path.split("/").at(-1) ?? path,
+    path,
+    state: "live",
+    children,
+  };
+}
+
+/**
+ * Converts a newly created provider document into a tree entry.
+ * @param document Newly created document snapshot.
+ * @returns A live document entry.
+ */
+function documentToWorkspaceEntry(document: WorkspaceDocument): WorkspaceEntry {
+  return {
+    kind: "document",
+    name: document.path.split("/").at(-1) ?? document.path,
+    path: document.path,
+    entryId: document.entryId ?? document.path,
+    parentEntryId: workspaceDirname(document.path) || undefined,
+    revision: document.revision,
+    metadataFingerprint: document.metadataFingerprint,
+    state: "live",
+  };
+}
+
+/**
+ * Inserts an entry into its workspace-relative parent, creating missing directory nodes.
+ * @param entries Current workspace tree.
+ * @param entry Entry to insert.
+ * @returns Updated workspace tree.
+ */
+function insertWorkspaceEntry(entries: WorkspaceEntry[], entry: WorkspaceEntry): WorkspaceEntry[] {
+  const parentPath = workspaceDirname(entry.path);
+  if (!parentPath) return sortWorkspaceEntries([...entries, entry]);
+  const parentSegments = parentPath.split("/");
+
+  /** Inserts into one tree level while resolving the next parent segment. @param levelEntries Entries at the current level. @param segmentIndex Parent segment index. @returns Updated entries at this level. */
+  const insertAtLevel = (levelEntries: WorkspaceEntry[], segmentIndex: number): WorkspaceEntry[] => {
+    const targetParentPath = parentSegments.slice(0, segmentIndex + 1).join("/");
+    const parentIndex = levelEntries.findIndex((item) => item.path === targetParentPath && item.kind === "directory");
+    if (parentIndex < 0) {
+      let nested: WorkspaceEntry = entry;
+      for (let index = parentSegments.length - 1; index >= segmentIndex; index -= 1) {
+        nested = createDirectoryEntry(parentSegments.slice(0, index + 1).join("/"), [nested]);
+      }
+      return sortWorkspaceEntries([...levelEntries, nested]);
+    }
+    const parent = levelEntries[parentIndex];
+    const nextParent = segmentIndex === parentSegments.length - 1
+      ? { ...parent, children: sortWorkspaceEntries([...(parent.children ?? []), entry]) }
+      : { ...parent, children: insertAtLevel(parent.children ?? [], segmentIndex + 1) };
+    return levelEntries.map((item, index) => index === parentIndex ? nextParent : item);
+  };
+
+  return insertAtLevel(entries, 0);
+}
+
+/**
+ * Removes one entry from a workspace tree without mutating the original tree.
+ * @param entries Current workspace tree.
+ * @param path Entry path to remove.
+ * @returns The updated tree and removed entry, when found.
+ */
+function removeWorkspaceEntry(entries: WorkspaceEntry[], path: string): { entries: WorkspaceEntry[]; entry: WorkspaceEntry | null } {
+  const directIndex = entries.findIndex((entry) => entry.path === path);
+  if (directIndex >= 0) {
+    return { entries: entries.filter((_entry, index) => index !== directIndex), entry: entries[directIndex] };
+  }
+  for (let index = 0; index < entries.length; index += 1) {
+    const current = entries[index];
+    if (!current.children) continue;
+    const result = removeWorkspaceEntry(current.children, path);
+    if (!result.entry) continue;
+    const next = [...entries];
+    next[index] = { ...current, children: result.entries };
+    return { entries: next, entry: result.entry };
+  }
+  return { entries, entry: null };
+}
+
+/**
+ * Rewrites one entry path and all descendant paths after a move.
+ * @param entry Entry being moved.
+ * @param sourcePath Original path prefix.
+ * @param destinationPath New path prefix.
+ * @returns Entry with updated paths and names.
+ */
+function remapWorkspaceEntry(entry: WorkspaceEntry, sourcePath: string, destinationPath: string): WorkspaceEntry {
+  const path = replacePathPrefix(entry.path, sourcePath, destinationPath);
+  return {
+    ...entry,
+    path,
+    name: path.split("/").at(-1) ?? path,
+    children: entry.children?.map((child) => remapWorkspaceEntry(child, sourcePath, destinationPath)),
+  };
+}
+
+/**
+ * Moves one tree entry to a new parent and updates all descendant paths.
+ * @param entries Current workspace tree.
+ * @param sourcePath Original entry path.
+ * @param destinationPath New entry path.
+ * @returns Updated workspace tree.
+ */
+export function moveWorkspaceEntry(entries: WorkspaceEntry[], sourcePath: string, destinationPath: string): WorkspaceEntry[] {
+  const removed = removeWorkspaceEntry(entries, sourcePath);
+  if (!removed.entry) return entries;
+  return insertWorkspaceEntry(removed.entries, remapWorkspaceEntry(removed.entry, sourcePath, destinationPath));
 }
 
 /**
@@ -1095,7 +1268,7 @@ function relativeTarget(documentPath: string, targetPath: string): string {
  * @param destinationPath Replacement path prefix.
  * @returns Updated source and its post-move path.
  */
-function updateMovedReferences(
+export function updateMovedReferences(
   content: string,
   documentPath: string,
   sourcePath: string,
@@ -1113,6 +1286,107 @@ function updateMovedReferences(
     return `${prefix}${relativeTarget(nextDocumentPath, nextTarget)}${anchor ?? ""}${suffix}`;
   });
   return { path: nextDocumentPath, content: updated };
+}
+
+export interface MovedReferenceCandidate {
+  entryId: string;
+  originalPath: string;
+  destinationPath: string;
+}
+
+/**
+ * Finds cached documents whose Markdown references may change after a move.
+ * @param documents Complete available local document snapshots.
+ * @param sourcePath Moved path prefix.
+ * @param destinationPath Replacement path prefix.
+ * @returns Documents requiring a provider write, identified without provider reads.
+ */
+export function movedReferenceCandidates(
+  documents: CachedDocument[],
+  sourcePath: string,
+  destinationPath: string,
+): MovedReferenceCandidate[] {
+  return documents.flatMap((document) => {
+    const updated = updateMovedReferences(document.content, document.path, sourcePath, destinationPath);
+    return updated.content === document.content ? [] : [{ entryId: document.entryId, originalPath: document.path, destinationPath: updated.path }];
+  });
+}
+
+/**
+ * Updates affected Markdown references after the provider move has already completed.
+ * @param provider Active workspace provider.
+ * @param cachedDocuments Local snapshots used to avoid a workspace-wide provider scan.
+ * @param documentEntries Pre-move document identities used to inspect only cache misses.
+ * @param sourcePath Former moved path prefix.
+ * @param destinationPath Current moved path prefix.
+ * @param generation Workspace generation that initiated the move.
+ * @param set Zustand state setter.
+ * @param get Zustand state accessor.
+ * @returns Nothing after bounded reference writes finish or are safely abandoned.
+ */
+async function updateReferencesAfterMove(
+  provider: WorkspaceProvider,
+  cachedDocuments: CachedDocument[],
+  documentEntries: WorkspaceEntry[],
+  sourcePath: string,
+  destinationPath: string,
+  generation: number,
+  set: (partial: Partial<WorkspaceState> | ((state: WorkspaceState) => Partial<WorkspaceState>)) => void,
+  get: () => WorkspaceState,
+): Promise<void> {
+  const candidates = movedReferenceCandidates(cachedDocuments, sourcePath, destinationPath);
+  const cachedCandidateCount = candidates.length;
+  const cachedEntryIds = new Set(cachedDocuments.map((document) => document.entryId));
+  for (const entry of documentEntries) {
+    const entryId = entry.entryId ?? entry.path;
+    if (!cachedEntryIds.has(entryId)) candidates.push({ entryId, originalPath: entry.path, destinationPath: replacePathPrefix(entry.path, sourcePath, destinationPath) });
+  }
+  recordActivity("workspace", "workspace.move-reference-update.started", { sourcePath, destinationPath, candidateCount: candidates.length, cacheMissCount: candidates.length - cachedCandidateCount });
+  let nextIndex = 0;
+  let updatedCount = 0;
+  let deferredCount = 0;
+  let failedCount = 0;
+
+  /** Processes candidates from the shared bounded queue. @returns Nothing when no candidates remain. */
+  const processCandidates = async (): Promise<void> => {
+    while (nextIndex < candidates.length && isCurrentWorkspaceOperation(provider.id, generation, get)) {
+      const candidate = candidates[nextIndex];
+      nextIndex += 1;
+      try {
+        const currentTab = get().tabs.find((tab) => tab.entryId === candidate.entryId);
+        if (currentTab && currentTab.saveState !== "clean" && currentTab.saveState !== "checking") {
+          const updatedTab = updateMovedReferences(currentTab.content, candidate.originalPath, sourcePath, destinationPath);
+          if (updatedTab.content === currentTab.content) continue;
+          set((state) => ({ tabs: state.tabs.map((tab) => tab.entryId === candidate.entryId ? { ...tab, ...updatedTab, saveState: "dirty-local" } : tab) }));
+          scheduleDraft(get, set, updatedTab.path);
+          deferredCount += 1;
+          continue;
+        }
+        const remote = await provider.readDocument(candidate.destinationPath);
+        const updated = updateMovedReferences(remote.content, candidate.originalPath, sourcePath, destinationPath);
+        if (updated.content === remote.content) continue;
+        const entryId = remote.entryId ?? candidate.entryId;
+        await checkpoint(provider.id, { ...remote, entryId, path: updated.path, editingState: "owned", cursor: 0, viewMode: "editor", saveState: "clean" }, "provider-save");
+        const revision = await provider.writeDocument({ path: updated.path, content: updated.content, format: remote.format, expectedRevision: remote.revision });
+        await commitCachedDocument(cachedDocumentFromProvider(provider.id, entryId, { ...remote, path: updated.path, content: updated.content, revision }));
+        indexSearchDocument(updated.path, updated.content);
+        set((state) => ({
+          tabs: state.tabs.map((tab) => tab.entryId === entryId && tab.saveState === "clean" ? { ...tab, path: updated.path, content: updated.content, revision } : tab),
+        }));
+        updatedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        recordActivity("workspace", "workspace.move-reference-update.document-failed", { errorCode: diagnosticErrorCode(error) }, "warning");
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, () => processCandidates()));
+  const level = failedCount > 0 || deferredCount > 0 ? "warning" : "info";
+  recordActivity("workspace", "workspace.move-reference-update.completed", { sourcePath, destinationPath, candidateCount: candidates.length, updatedCount, deferredCount, failedCount }, level);
+  if (failedCount > 0 && isCurrentWorkspaceOperation(provider.id, generation, get)) {
+    set({ error: `The entry was renamed, but ${failedCount} linked document${failedCount === 1 ? "" : "s"} could not be updated.` });
+  }
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -1243,9 +1517,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   refreshEntries: async () => {
     const provider = get().provider;
     if (!provider) return;
+    const refreshVersion = entriesStateVersion;
     try {
       const previous = await loadWorkspaceManifest(provider.id);
       const entries = await provider.listEntries();
+      if (get().provider?.id !== provider.id || refreshVersion !== entriesStateVersion) return;
       provider.primeEntries?.(entries);
       const manifest: WorkspaceManifest = {
         workspaceId: provider.id,
@@ -1275,7 +1551,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         else reportSyncFailure(error);
       });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      if (get().provider?.id === provider.id && refreshVersion === entriesStateVersion) set({ error: errorMessage(error) });
+      else reportSyncFailure(error);
     }
   },
 
@@ -1326,6 +1603,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     } catch (error) {
       set({ error: errorMessage(error) });
     }
+  },
+
+  /** Activates an open tab without changing file-browser selection. @param path Open document path. @returns Nothing after session persistence is scheduled. */
+  activateDocument: (path) => {
+    if (!get().tabs.some((tab) => tab.path === path)) return;
+    set({ activePath: path });
+    scheduleSession(get);
   },
 
   closeDocument: (path) => {
@@ -1536,21 +1820,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
 
-  createDocument: async (path) => {
+  createDocument: async (path, options = {}) => {
     const provider = get().provider;
-    if (!provider) return;
+    const { selectEntry = true, activate = true } = options;
+    if (!provider) return null;
     try {
       const document = await provider.createDocument(ensureMarkdownPath(path), "# Untitled\n");
       const entryId = document.entryId ?? document.path;
+      invalidateEntriesRefreshes();
+      set((state) => ({ entries: insertWorkspaceEntry(state.entries, documentToWorkspaceEntry(document)), error: null }));
       await commitCachedDocument(cachedDocumentFromProvider(provider.id, entryId, document));
-      await get().refreshEntries();
+      void get().refreshEntries();
       const lease = await acquireDocumentEditingLease(provider.id, entryId, editorOwnerToken);
       if (lease) editingLeases.set(`${provider.id}:${entryId}`, lease);
-      set((state) => ({ tabs: [...state.tabs, { ...document, entryId, editingState: lease ? "owned" : "read-only", cursor: document.content.length, viewMode: "editor", saveState: "clean" }], activePath: document.path, selectedPath: document.path, error: null }));
+      set((state) => ({
+        tabs: [...state.tabs, { ...document, entryId, editingState: lease ? "owned" : "read-only", cursor: document.content.length, viewMode: "editor", saveState: "clean" }],
+        activePath: activate ? document.path : state.activePath,
+        selectedPath: selectEntry ? document.path : state.selectedPath,
+        error: null,
+      }));
       indexSearchDocument(document.path, document.content);
       scheduleSession(get);
+      return document.path;
     } catch (error) {
       set({ error: errorMessage(error) });
+      return null;
     }
   },
 
@@ -1559,8 +1853,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!provider) return;
     try {
       await provider.createDirectory(path);
-      await get().refreshEntries();
-      set({ selectedPath: path, error: null });
+      invalidateEntriesRefreshes();
+      set((state) => ({ entries: insertWorkspaceEntry(state.entries, createDirectoryEntry(path)), selectedPath: path, error: null }));
+      void get().refreshEntries();
     } catch (error) {
       set({ error: errorMessage(error) });
     }
@@ -1569,37 +1864,56 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   moveEntry: async (sourcePath, destinationPath) => {
     const provider = get().provider;
     if (!provider) return;
+    const generation = workspaceGeneration;
+    const documentEntries = flattenEntries(get().entries).filter((entry) => entry.kind === "document");
+    const cachedDocumentsPromise = loadCachedDocuments(provider.id);
+    let providerMoved = false;
+    recordActivity("workspace", "workspace.move.started", { sourcePath, destinationPath });
     try {
-      const documentPaths = flattenEntries(get().entries).filter((entry) => entry.kind === "document").map((entry) => entry.path);
-      const originals = await Promise.all(documentPaths.map((path) => provider.readDocument(path)));
-      const updates = originals.map((document) => ({ document, ...updateMovedReferences(document.content, document.path, sourcePath, destinationPath) }));
-      const affected = updates.filter((update) => update.content !== update.document.content);
-      if (affected.length > 1 && !window.confirm(`${affected.length} Markdown files contain references that will be updated. Continue?`)) return;
-      for (const document of originals) await checkpoint(provider.id, { ...document, entryId: document.entryId ?? document.path, editingState: "owned", cursor: 0, viewMode: "editor", saveState: "clean" }, "provider-save");
       await provider.move(sourcePath, destinationPath);
-      for (const tab of get().tabs.filter((item) => item.path === sourcePath || item.path.startsWith(`${sourcePath}/`))) {
-        await moveRepositoryEntry(provider.id, tab.entryId, replacePathPrefix(tab.path, sourcePath, destinationPath));
-      }
-      const writtenRevisions = new Map<string, WorkspaceRevision>();
-      for (const update of affected) {
-        const revision = await provider.writeDocument({ path: update.path, content: update.content, format: update.document.format, expectedRevision: update.document.revision });
-        writtenRevisions.set(update.path, revision);
-        indexSearchDocument(update.path, update.content);
-      }
+      providerMoved = true;
+      recordActivity("workspace", "workspace.move.provider-succeeded", { sourcePath, destinationPath });
+      invalidateEntriesRefreshes();
       set((state) => ({
-        tabs: state.tabs.map((tab) => {
-          const updated = updateMovedReferences(tab.content, tab.path, sourcePath, destinationPath);
-          return { ...tab, ...updated, revision: writtenRevisions.get(updated.path) ?? tab.revision };
-        }),
+        entries: moveWorkspaceEntry(state.entries, sourcePath, destinationPath),
+        tabs: state.tabs.map((tab) => ({ ...tab, path: replacePathPrefix(tab.path, sourcePath, destinationPath) })),
         activePath: state.activePath ? replacePathPrefix(state.activePath, sourcePath, destinationPath) : null,
         selectedPath: destinationPath,
         error: null,
       }));
       removeSearchDocument(sourcePath);
-      await get().refreshEntries();
+
+      const cachedDocuments = await cachedDocumentsPromise;
+      const documentsById = new Map(cachedDocuments.map((document) => [document.entryId, document]));
+      for (const tab of get().tabs) {
+        const cached = documentsById.get(tab.entryId);
+        documentsById.set(tab.entryId, {
+          workspaceId: provider.id,
+          entryId: tab.entryId,
+          path: cached?.path ?? replacePathPrefix(tab.path, destinationPath, sourcePath),
+          content: tab.content,
+          format: tab.format,
+          cachedContentRevision: tab.revision,
+          metadataFingerprint: tab.metadataFingerprint,
+          indexRevision: cached?.indexRevision,
+          diagnosticsGeneration: cached?.diagnosticsGeneration,
+          lastAccessedAt: cached?.lastAccessedAt ?? Date.now(),
+        });
+      }
+      const referenceSources = [...documentsById.values()];
+      for (const document of referenceSources.filter((item) => item.path === sourcePath || item.path.startsWith(`${sourcePath}/`))) {
+        await moveRepositoryEntry(provider.id, document.entryId, replacePathPrefix(document.path, sourcePath, destinationPath));
+      }
+      void get().refreshEntries();
       scheduleSession(get);
+      void updateReferencesAfterMove(provider, referenceSources, documentEntries, sourcePath, destinationPath, generation, set, get).catch((error) => {
+        reportSyncFailure(error);
+        if (isCurrentWorkspaceOperation(provider.id, generation, get)) set({ error: "The entry was renamed, but linked documents could not be updated." });
+      });
     } catch (error) {
-      set({ error: `Move transaction stopped safely: ${errorMessage(error)} Recovery snapshots were retained.` });
+      const message = errorMessage(error);
+      recordActivity("workspace", "workspace.move.failed", { sourcePath, destinationPath, providerMoved, errorCode: diagnosticErrorCode(error) }, "error");
+      set({ error: providerMoved ? `The entry was renamed, but the workspace could not be refreshed: ${message}` : `The entry could not be renamed: ${message}` });
       await get().refreshEntries();
     }
   },
@@ -1610,10 +1924,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await get().flushDurableDrafts();
       const lastTrash = await provider.trash(path);
+      invalidateEntriesRefreshes();
       removeSearchDocument(path);
       set((state) => {
         const tabs = state.tabs.filter((tab) => tab.path !== path && !tab.path.startsWith(`${path}/`));
         return {
+          entries: removeWorkspaceEntry(state.entries, path).entries,
           lastTrash,
           tabs,
           activePath: state.activePath && (state.activePath === path || state.activePath.startsWith(`${path}/`)) ? tabs.at(-1)?.path ?? null : state.activePath,
@@ -1621,7 +1937,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           error: null,
         };
       });
-      await get().refreshEntries();
+      void get().refreshEntries();
       scheduleSession(get);
     } catch (error) {
       set({ error: errorMessage(error) });
