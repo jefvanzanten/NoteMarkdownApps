@@ -84,9 +84,10 @@
   .resizer { display: none; }
   .scrim { position: absolute; inset: 0; z-index: 25; display: block; border: 0; background: rgba(5, 9, 6, 0.56); }
   .main { width: 100%; }
-  .documentBar { flex-wrap: wrap; height: auto; }
+  .documentBar { position: fixed; top: 0; right: 0; left: 0; z-index: 20; flex-wrap: wrap; height: auto; }
+  .documentPane { grid-row: 2; }
   .modeToggle { right: 0.35rem; bottom: 2rem; }
-  .statusbar { padding-right: 0.5rem; }
+  .statusbar { grid-row: 3; padding-right: 0.5rem; }
 }
 
 @media print {
